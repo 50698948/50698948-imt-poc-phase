@@ -235,6 +235,35 @@ def get_reports(incident_no: str, latest_only: bool = False):
     return get_report_history_standalone(incident_no)
 
 
+@app.post("/api/reports/{incident_no}/generate")
+def generate_report_for_ticket(incident_no: str):
+    """Trigger report + task generation for a specific incident."""
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    from poc_standalone import _build_highlights, _build_report, _generate_recommendations, _save_recommendations
+    import sqlite3, uuid, json
+
+    candidates = retrieve(ticket)
+    candidates = [c for c in candidates if c.get("incident_no") != incident_no]
+    reranked = rerank(ticket, candidates)
+    highlights = _build_highlights(ticket, reranked)
+    content = _build_report(ticket, reranked, highlights)
+    tasks = _generate_recommendations(ticket, reranked)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO leader_reports(id, incident_no, ticket_version, content, highlights) VALUES(?,?,?,?,?)",
+        (str(uuid.uuid4()), incident_no, ticket.get("version", 1), content, json.dumps(highlights)))
+    _save_recommendations(conn, incident_no, ticket.get("version", 1), tasks)
+    conn.commit()
+    conn.close()
+
+    return {"status": "ok", "incident_no": incident_no, "highlights": highlights,
+            "tasks_count": len(tasks)}
+
+
 @app.get("/api/tasks/{incident_no}")
 def get_tasks(incident_no: str):
     """Get recommended tasks for a ticket."""

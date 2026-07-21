@@ -33,10 +33,7 @@ export default function ReportsPage() {
     if (!selected) return;
     setGenerating(true);
     try {
-      // trigger lifecycle update to force new report generation
-      const ticket = await fetch(`${API}/api/tickets/${selected}`).then((r) => r.json());
-      // call lifecycle which updates ticket and generates reports
-      await fetch(`${API}/api/lifecycle`, { method: "POST" });
+      await fetch(`${API}/api/reports/${selected}/generate`, { method: "POST" });
       await loadReports(selected);
     } catch (e) { console.error(e); }
     setGenerating(false);
