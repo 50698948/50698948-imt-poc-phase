@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 const API = "http://localhost:8000";
 
@@ -69,12 +70,13 @@ function StageCard({ stage, index, defaultExpanded }: { stage: any; index: numbe
             <div className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1.5">Top-5 Similar Historical Tickets</div>
             <div className="grid grid-cols-5 gap-2">
               {stage.top5_reranked?.map((r: any, j: number) => (
-                <div key={j} className="bg-gray-800/50 rounded-lg p-2.5 border border-gray-800 hover:border-gray-700 transition-colors cursor-default">
-                  <div className="text-cyan-400 text-[10px] font-bold font-mono">{r.incident_no}</div>
+                <Link key={j} href={`/incident/${r.incident_no}`}
+                  className="bg-gray-800/50 rounded-lg p-2.5 border border-gray-800 hover:border-cyan-700 hover:bg-gray-800 transition-all cursor-pointer block group">
+                  <div className="text-cyan-400 text-[10px] font-bold font-mono group-hover:text-cyan-300">{r.incident_no}</div>
                   <div className="text-yellow-400 text-xs font-bold mt-0.5">{r.score?.toFixed(1)}</div>
-                  <div className="text-gray-500 text-[9px] leading-tight mt-1 line-clamp-2">{r.title}</div>
+                  <div className="text-gray-500 text-[9px] leading-tight mt-1 line-clamp-2 group-hover:text-gray-400">{r.title}</div>
                   <div className="text-gray-600 text-[8px] mt-1 truncate">{r.reason}</div>
-                </div>
+                </Link>
               ))}
             </div>
           </div>
