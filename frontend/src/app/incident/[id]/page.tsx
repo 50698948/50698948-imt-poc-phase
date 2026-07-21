@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 
 const API = "http://localhost:8000";
 
@@ -44,15 +45,20 @@ export default function IncidentPage() {
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
         <div className="flex items-center justify-between">
           <div>
-            <div className="flex items-center gap-3 mb-2">
+            <Link href="/" className="text-gray-500 hover:text-gray-300 text-[10px] transition-colors mb-2 inline-block">
+              ← Back to Board
+            </Link>
+            <div className="flex items-center gap-3 mb-1">
+
+
               <span className="text-cyan-400 font-bold text-lg">{timeline.incident_no}</span>
               <span className={`text-xs px-2 py-0.5 rounded uppercase ${timeline.status === "resolved" ? "text-green-400 bg-green-900/30" : "text-yellow-400 bg-yellow-900/30"}`}>{timeline.status}</span>
               <span className="text-gray-600 text-xs">v{timeline.version}</span>
             </div>
             <h1 className="text-gray-200 text-sm">{timeline.title}</h1>
           </div>
-          <div className="text-right">
-            <a href={`/chat`} className="text-cyan-500 hover:text-cyan-400 text-xs">Open Chat →</a>
+          <div className="text-right flex items-center gap-3">
+            <Link href="/chat" className="text-cyan-500 hover:text-cyan-400 text-xs">Open Chat →</Link>
           </div>
         </div>
       </div>
