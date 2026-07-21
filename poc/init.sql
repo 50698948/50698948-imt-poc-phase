@@ -12,7 +12,8 @@ CREATE TABLE incident_tickets (
     severity        VARCHAR(16)  NOT NULL CHECK (severity IN ('P0','P1','P2','P3')),
     service_name    VARCHAR(128) NOT NULL,
     category        VARCHAR(64)  NOT NULL,
-    status          VARCHAR(16)  NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+    status          VARCHAR(16)  NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open','investigating','mitigated','resolved')),
     error_type      VARCHAR(64),
     keywords        TEXT[]       DEFAULT '{}',
 
@@ -20,6 +21,8 @@ CREATE TABLE incident_tickets (
     embedding_root_cause  VECTOR(384),
 
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    version         INT          NOT NULL DEFAULT 1,
     resolved_at     TIMESTAMPTZ
 );
 
