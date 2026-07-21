@@ -16,7 +16,8 @@ Incident Ticket 智能召回与分析系统的完整操作手册。
 8. [独立模式 — 零依赖运行](#8-独立模式--零依赖运行)
 9. [数据库操作 API](#9-数据库操作-api)
 10. [一键脚本](#10-一键脚本)
-11. [常见问题](#11-常见问题)
+11. [Demo 演示完整操作步骤](#11-demo-演示完整操作步骤)
+12. [常见问题](#12-常见问题)
 
 ---
 
@@ -81,6 +82,7 @@ docker exec -it imt-poc-db psql -U imt -d imt_poc
 \dt
 \d incident_tickets
 \d leader_reports
+\d recommended_tasks
 SELECT count(*) FROM incident_tickets;
 ```
 
@@ -215,15 +217,17 @@ python demo_lifecycle.py
 每个阶段输出：
 - **Ticket 摘要** — 当前版本、状态、描述长度
 - **Top-5 召回** — 相似历史 ticket 及相似度分数
-- **Leader Report Highlights** — 自动生成的 3-5 条汇报要点
+- **Report Demo** — 3-5 条汇报 highlights
+- **Recommended Tasks** — 推荐任务列表 + 来源标注
 
 最终输出：
 - **生命周期汇总表** — score 趋势对比
-- **Report 历史汇总** — 各版本报告的 highlights 变化
+- **Report 历史汇总** — 各版本 highlights 变化
+- **Task 历史汇总** — 各版本任务演进
 
 ### 5.4 演示话术
 
-> "Incident ticket 不是静态文档。随着事件发展，SRE 不断补充信息——从模糊告警到精确根因。系统每次更新时自动刷新向量、重新召回、生成汇报。从 Stage 0 到 Stage 3，召回分数从 5.6 提升到 18.3（+226%），Leader Report 从仅显示 STATUS+NEXT 演进到包含 ROOT CAUSE+ACTION+REFERENCE。"
+> "Incident ticket 不是静态文档。随着事件发展，SRE 不断补充信息——从模糊告警到精确根因。系统每次更新时自动刷新向量、重新召回、生成汇报和任务推荐。从 Stage 0 到 Stage 3，召回分数提升 226%，Report 从 STATUS+NEXT 演进到 ROOT CAUSE+ACTION+REFERENCE，Tasks 从 7 条通用任务增加到 8 条含根因确认。"
 
 ---
 
@@ -278,12 +282,8 @@ v2  [STATUS] INVESTIGATING  |  [REFERENCE] INC-2024-0014  |  [REFERENCE] INC-202
 
 v3  [STATUS] INVESTIGATING  |  [ROOT CAUSE] N+1 connection pattern...  |  [REFERENCE] INC-2024-0002  |  [REFERENCE] INC-2024-0001  |  [NEXT] Apply fix
 
-v4  [STATUS] RESOLVED  |  [ROOT CAUSE] N+1 connection pattern...  |  [ACTION] Rolled back deployment...  |  [REFERENCE] INC-2024-0002  |  [REFERENCE] INC-2024-0001
+v4  [STATUS] RESOLVED  |  [ROOT CAUSE] N+1 connection pattern...  |  [ACTION] Rolled back deployment...  |  [REFERENCE] INC-2024-0002
 ```
-
-### 6.6 演示话术
-
-> "每次 ticket 更新，系统自动为 Leader 生成一份结构化汇报——包括当前状态、影响评估、调查进展，以及 3-5 条重点标注。汇报版本与 ticket version 一一对应，可以追溯整个 incident 生命周期中每个关键节点的状态快照。"
 
 ---
 
@@ -342,15 +342,11 @@ pending → rejected
 in_progress → rejected
 ```
 
-### 7.6 演示话术
-
-> "除了向 Leader 汇报，系统还面向一线工程师生成可操作的任务推荐——按错误类型匹配 SRE playbook，从历史 ticket 的 action_plan 中提取步骤。每个 task 都可以被人工修订：标记完成、添加备注、或拒绝不适用项。这就是人机协作的 incident 处理流程。"
-
 ---
 
 ## 8. 独立模式 — 零依赖运行
 
-### 7.1 适用场景
+### 8.1 适用场景
 
 - Docker 不可用
 - 网络受限（无法拉取镜像）
@@ -388,7 +384,7 @@ python poc_standalone.py
 
 ## 9. 数据库操作 API
 
-### 8.1 入库
+### 9.1 入库
 
 ```python
 from db import ingest_ticket, ingest_tickets_batch
@@ -403,7 +399,7 @@ tid = ingest_ticket(
 ids = ingest_tickets_batch([{...}, {...}])
 ```
 
-### 8.2 查询
+### 9.2 查询
 
 ```python
 from db import get_ticket_by_incident_no, get_ticket_by_id
@@ -412,34 +408,42 @@ ticket = get_ticket_by_incident_no("INC-2025-0001")
 print(ticket["title"], ticket["status"], ticket["version"])
 ```
 
-### 8.3 更新（触发 re-embed）
+### 9.3 更新（触发 re-embed + report + tasks）
 
 ```python
 from db import (
     update_ticket_description,    # 更新描述 + re-embed description
     update_ticket_root_cause,     # 更新根因 + re-embed root_cause
     update_ticket_resolution,     # 更新方案 + re-embed root_cause+resolution
-    update_ticket_status,         # 状态转移 + 可选字段更新 + 自动生成 Leader Report
+    update_ticket_status,         # 状态转移 + 可选字段更新 + 自动生成 Report + Tasks
 )
 
 update_ticket_status("INC-2025-0001", "investigating",
     description="Enriched description...",
     error_type="timeout",
 )
-# ↑ 自动: version += 1, updated_at=now(), re-embed, generate leader report
+# 自动: version += 1, updated_at=now(), re-embed, generate report, generate tasks
 ```
 
-### 8.4 Leader Report
+### 9.4 Report 与 Tasks
 
 ```python
 from db import get_latest_report, get_report_history
+from db import get_recommendations, revise_task
 
+# Report
 latest = get_latest_report("INC-2025-0001")
 for hl in latest["highlights"]:
     print(f"  * {hl}")
 
-history = get_report_history("INC-2025-0001")
-print(f"Total reports: {len(history)}")
+# Tasks
+tasks = get_recommendations("INC-2025-0001")
+for t in tasks:
+    print(f"[{t['status']}] T{t['task_order']:02d} {t['description'][:80]}")
+
+# Revise
+revise_task(tasks[0]["id"], status="completed", revised_by="david.lin",
+            revision_note="Completed — connection pool verified")
 ```
 
 ---
@@ -461,7 +465,266 @@ powershell -ExecutionPolicy Bypass -File run_all.ps1
 
 ---
 
-## 11. 常见问题
+## 11. Demo 演示完整操作步骤
+
+> 以下是一套完整的演示流程，按 Feature 顺序逐步展示。每条命令均可直接复制运行。
+
+---
+
+### 11.1 初始环境准备
+
+```powershell
+# 1. 进入项目目录
+cd C:\claudeWorkspace\IMT\poc
+
+# 2. 清理旧环境 + 重建数据库
+docker compose down -v
+docker compose up -d
+
+# 3. 等待数据库就绪
+Start-Sleep -Seconds 5
+docker ps --filter "name=imt-poc-db"
+# 期望: Up XX seconds (healthy)
+
+# 4. 灌入模拟数据
+python seed_data.py
+# 期望: Seeded 20 tickets. Done.
+```
+
+---
+
+### 11.2 Feature 1 — E2E 检索 Pipeline（展示智能召回）
+
+```powershell
+python main.py
+```
+
+**演示重点（对着输出讲解）：**
+
+1. **当前 Incident**：指向 "Order service P99 latency spike after MySQL migration"——一个典型的数据库迁移后性能退化问题。
+
+2. **Step 2 — 三路召回 + RRF 融合**：
+   ```
+   [1] INC-2024-0001 | MySQL master CPU 100% after traffic spike
+   [2] INC-2024-0002 | PostgreSQL connection pool exhausted during black-friday
+   [3] INC-2024-0006 | Intermittent 502 errors between API gateway and upstream
+   ...
+   ```
+   三个检索路径（向量语义 + 全文关键词 + 结构化精确匹配）各自召回 Top-50/30，再通过 RRF 算法融合排序。注意 INC-2024-0001 排在第一位——因为它是同一个 `order-service`，结构化路径提升了它的权重。
+
+3. **Step 3 — 精排**：
+   ```
+   [1] INC-2024-0013 | score=24.5 | General symptom similarity
+   [2] INC-2024-0006 | score=21.7 | General symptom similarity
+   ```
+   精排使用 root_cause embedding 做余弦相似度加权重排。低分说明当前 ticket 没有 root_cause，仅靠描述匹配——这也符合实际情况。
+
+4. **Step 4 — 行动计划**：输出 Phase A（紧急止血）/ Phase B（诊断验证）/ Phase C（根因修复）三阶段计划，引用最相似历史 ticket 的 resolution。
+
+**一句话总结**：> "系统从 20 条历史 ticket 中通过向量+全文+结构化三路召回，RRF 融合后 Top-30，精排后 Top-5，生成带置信度的行动计划。"
+
+---
+
+### 11.3 Feature 2 — 生命周期 Demo（展示动态向量更新）
+
+```powershell
+# 先重置数据库（确保干净状态）
+docker compose down -v
+docker compose up -d
+Start-Sleep -Seconds 5
+python seed_data.py
+
+# 运行生命周期 demo
+python demo_lifecycle.py
+```
+
+**逐阶段讲解：**
+
+#### Stage 0 — T+0min：初始告警
+
+```
+Status=open  v1  desc_len=65
+  >>> REPORT DEMO (v1) <<<
+      * [STATUS] Incident is currently OPEN — severity P0
+```
+此刻 ticket 只有一句话描述。召回分数极低（avg 5.6），匹配结果不理想。没有 root_cause，没有 resolution。
+
+#### Stage 1 — T+10min：Triage 完成
+
+```
+Status=investigating  v2  desc_len=336
+  >>> RECOMMENDED TASKS (7 items) <<<
+      [ ] T01  Check connection pool metrics for payment-service
+      [ ] T02  Review slow query logs for payment-service
+      [ ] T03  Verify recent deployment diff for payment-service
+      ...
+```
+SRE 补充了连接池指标、线程 dump、P99 延迟数据。描述从 65 字符扩展到 336 字符。**向量自动重新计算**。召回分数从 5.6 → 9.4（+69%）。
+
+Report 自动生成：`[STATUS] INVESTIGATING + [REFERENCE] ×2 + [NEXT]`
+
+Tasks 自动生成：3 条 timeout 专项 + 4 条通用 SRE playbook。
+
+**关键点**：> "描述越精确，向量越窄，检索越准。每次更新自动 re-embed，无需手动触发。"
+
+#### Stage 2 — T+45min：根因定位
+
+```
+Status=investigating  v3  desc_len=575  RootCause=YES
+      * [ROOT CAUSE] New deployment added fraud-check HTTP call...
+      * [NEXT] Apply fix. Validate in staging. Roll out.
+```
+SRE 定位到根因：fraud-check 调用导致 N+1 连接模式。`root_cause` 字段在 `embedding_root_cause` 中生成独立向量。召回分数 9.4 → 17.3（+83%）。
+
+Report 新增 `[ROOT CAUSE]` highlight。Tasks 新增 `[T08] Confirm root cause hypothesis`。
+
+**关键点**：> "root_cause embedding 是第二个粒度的向量——专门用于匹配历史 ticket 的根因描述。这是精排分数跳升的核心原因。"
+
+#### Stage 3 — T+90min：Resolved
+
+```
+Status=resolved  v4  desc_len=245  RC=YES  Resolution=YES
+      * [ACTION] Resolution applied: Rolled back deployment...
+```
+修复完成，ticket 关闭。Report 新增 `[ACTION]` highlight。整个 lifecycle 分数趋势：
+
+```
+Stage  v  Status         RC?  AvgScore
+T+0     1  open           N     5.6
+T+10    2  investigating   N     9.4
+T+45    3  investigating   Y    17.3
+T+90    4  resolved        Y    18.3
+```
+
+**一句话总结**：> "随着 incident 从模糊告警演进到根因定位再到解决关闭，embedding 逐步精准化，召回分数提升 226%。每个阶段自动产出 Report + Tasks。"
+
+---
+
+### 11.4 Feature 3 — Report Demo（展示自动汇报）
+
+演示完 lifecycle 后，Report 已在数据库中。手动查询验证：
+
+```python
+# 在 Python 交互环境中运行
+import sys; sys.path.insert(0, r'C:\claudeWorkspace\IMT\poc')
+from db import get_report_history, get_latest_report
+
+# 查看最新报告
+latest = get_latest_report("INC-2025-0001")
+print(latest["content"][:600])
+
+# 查看报告历史演进
+history = get_report_history("INC-2025-0001")
+for r in history:
+    print(f"\n--- v{r['ticket_version']} ---")
+    for hl in r["highlights"]:
+        print(f"  {hl}")
+```
+
+**展示重点**：
+- v2：仅有 STATUS + REFERENCE + NEXT（无根因，无操作）
+- v3：STATUS + ROOT CAUSE + REFERENCE + NEXT
+- v4：STATUS + ROOT CAUSE + ACTION + REFERENCE（完整闭环）
+
+**一句话总结**：> "每次 ticket 更新自动生成一份面向 Leader 的结构化汇报，6 个固定 section，3-5 条重点标注。报告版本与 ticket version 一一对应，可完整追溯 incident 生命周期的每个关键快照。"
+
+---
+
+### 11.5 Feature 4 — Engineer Task Recommendations（展示任务推荐与人工修订）
+
+#### Step 1：查看自动生成的任务
+
+```python
+import sys; sys.path.insert(0, r'C:\claudeWorkspace\IMT\poc')
+from db import get_recommendations
+
+tasks = get_recommendations("INC-2025-0001")
+for t in tasks:
+    print(f"[{t['status']:12s}] T{t['task_order']:02d}  {t['description'][:80]}  |  src: {t['source']}")
+```
+
+输出示例：
+```
+[pending     ] T01  Check connection pool metrics for payment-service  |  src: best-practice/timeout
+[pending     ] T02  Review slow query logs for payment-service         |  src: best-practice/timeout
+[pending     ] T03  Verify recent deployment diff for payment-service  |  src: best-practice/timeout
+[pending     ] T04  Assess blast radius: identify affected services    |  src: sre-playbook/general
+[pending     ] T05  Check recent deployments for payment-service       |  src: sre-playbook/general
+[pending     ] T06  Collect logs, metrics, and traces                  |  src: sre-playbook/general
+[pending     ] T07  Set up monitoring dashboard for payment-service    |  src: sre-playbook/general
+[pending     ] T08  Confirm root cause: N+1 connection pattern...      |  src: current-investigation
+```
+
+**讲解**：> "8 条推荐任务，分 4 个来源——error_type 模板（timeout 专项）、SRE playbook（通用最佳实践）、current-investigation（当前根因）。每条都有明确的来源标注，让工程师知道为什么推荐这个任务。"
+
+---
+
+#### Step 2：工程师人工修订任务
+
+```python
+from db import revise_task
+
+# 工程师 david.lin 开始工作：
+# T01 — 检查连接池指标：发现 active=50/50，pending=340 → 确认连接池耗尽
+revise_task(tasks[0]["id"], status="completed", revised_by="david.lin",
+    revision_note="Confirmed — HikariCP active=50/50, pending=340, pool exhausted")
+
+# T02 — 检查慢查询：日志中无明显慢查询，延迟来自连接等待
+revise_task(tasks[1]["id"], status="completed", revised_by="david.lin",
+    revision_note="No slow queries found. Latency is connection-acquisition wait time")
+
+# T03 — 验证部署 diff：发现 14:00 的部署添加了 fraud-check 调用
+revise_task(tasks[2]["id"], status="completed", revised_by="david.lin",
+    revision_note="Found: v2.4.1 added fraud-check HTTP call inside /charge handler")
+
+# T08 — 根因确认：已验证
+revise_task(tasks[7]["id"], status="completed", revised_by="david.lin",
+    revision_note="Root cause confirmed — rolled back deployment, pool recovered")
+
+# T04 — 评估爆炸半径：不适用，影响范围仅限于 payment-service
+revise_task(tasks[3]["id"], status="rejected",
+    revision_note="N/A — impact limited to payment-service only")
+
+# 重新查询，查看修订后的状态
+tasks = get_recommendations("INC-2025-0001")
+for t in tasks:
+    print(f"[{t['status']:12s}] T{t['task_order']:02d}  {t['description'][:60]}  "
+          f"{'revised by '+t['revised_by'] if t.get('revised_by') else ''}")
+```
+
+输出示例：
+```
+[completed   ] T01  Check connection pool metrics for payment-service  revised by david.lin
+[completed   ] T02  Review slow query logs for payment-service         revised by david.lin
+[completed   ] T03  Verify recent deployment diff for payment-service  revised by david.lin
+[pending     ] T04  Assess blast radius: identify affected...          (rejected, not shown)
+[pending     ] T05  Check recent deployments for payment-service       (pending)
+[pending     ] T06  Collect logs, metrics, and traces                  (pending)
+[pending     ] T07  Set up monitoring dashboard for payment-service    (pending)
+[completed   ] T08  Confirm root cause: N+1 connection pattern...      revised by david.lin
+```
+
+**讲解**：> "工程师逐个验收任务：T01-T03 确认完成并附上发现，T08 根因确认完成，T04 标记为不适用。每个修订都记录了谁做的、什么时间、什么备注。这就是人机协作——系统推荐、人工验收、可追溯。"
+
+---
+
+### 11.6 快速重置（如需重新演示）
+
+```powershell
+# 完全重置
+docker compose down -v
+docker compose up -d
+Start-Sleep -Seconds 5
+python seed_data.py
+
+# 再次运行任意 demo
+python main.py
+python demo_lifecycle.py
+```
+
+---
+
+## 12. 常见问题
 
 ### Q: Docker 容器无法启动
 
@@ -509,7 +772,6 @@ from db import get_ticket_by_incident_no
 before = get_ticket_by_incident_no("INC-2025-0001")
 print(f"Before: v{before['version']}, desc_len={len(before['description'])}")
 
-# 更新
 from db import update_ticket_description
 update_ticket_description("INC-2025-0001", "New longer description...")
 
@@ -518,7 +780,7 @@ print(f"After:  v{after['version']}, desc_len={len(after['description'])}")
 # version 自增，embedding 自动刷新
 ```
 
-### Q: argv 或 RRF 参数如何调参
+### Q: RRF 或检索参数如何调参
 
 编辑 `config.py`：
 ```python
