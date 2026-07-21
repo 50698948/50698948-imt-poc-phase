@@ -254,6 +254,133 @@ def revise_task(task_id: str, req: ReviseTaskRequest):
     return result
 
 
+class ChatMessage(BaseModel):
+    message: str
+    incident_no: str = ""
+
+
+@app.post("/api/chat")
+def chat_endpoint(req: ChatMessage):
+    """Chat interface — natural language incident management."""
+    msg = req.message.strip().lower()
+    incident_no = req.incident_no
+
+    if not incident_no:
+        return {"reply": "Please specify an incident number (e.g., INC-2025-0001).", "actions": []}
+
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        return {"reply": f"Incident {incident_no} not found.", "actions": []}
+
+    actions = []
+    status_map = {"open": "open", "investigating": "investigating", "mitigated": "mitigated", "resolved": "resolved"}
+    for k, v in status_map.items():
+        if k in msg:
+            update_ticket(incident_no, status=v)
+            ticket = get_ticket(incident_no)
+            actions.append(f"status→{v}")
+            break
+
+    if "root cause" in msg:
+        idx = msg.find("root cause")
+        rc = msg[idx:].split("\n")[0]
+        rc = rc.replace("root cause", "").strip().lstrip(": is ").strip()
+        if len(rc) > 10:
+            update_ticket(incident_no, root_cause=rc[:500])
+            ticket = get_ticket(incident_no)
+            actions.append("root_cause:updated")
+
+    if "resolution" in msg or "resolved by" in msg:
+        for kw in ["resolution:", "resolved by:", "fix:"]:
+            if kw in msg:
+                idx = msg.find(kw)
+                res = msg[idx + len(kw):].split("\n")[0].strip()
+                if len(res) > 10:
+                    update_ticket(incident_no, resolution=res[:500])
+                    ticket = get_ticket(incident_no)
+                    actions.append("resolution:updated")
+                break
+
+    if "description" in msg and (":" in msg or "update" in msg):
+        idx = msg.find("description")
+        desc = msg[idx:].split("\n")[0]
+        desc = desc.replace("description", "").strip().lstrip(": is ").strip()
+        if len(desc) > 10:
+            update_ticket(incident_no, description=desc[:1000])
+            ticket = get_ticket(incident_no)
+            actions.append("description:updated")
+
+    # Build reply
+    reply = [
+        f"**{ticket.get('incident_no')}** — {ticket.get('title','')}",
+        f"Status: **{ticket.get('status','open').upper()}** | Severity: {ticket.get('severity','?')} | v{ticket.get('version',1)}",
+    ]
+    if ticket.get("root_cause"):
+        reply.append(f"\nRoot Cause: {ticket['root_cause'][:200]}")
+    if ticket.get("resolution"):
+        reply.append(f"Resolution: {ticket['resolution'][:200]}")
+    if actions:
+        reply.append(f"\n✅ Actions: {', '.join(actions)}")
+
+    if "recommend" in msg or "task" in msg:
+        tasks = get_recommendations_standalone(incident_no)
+        if tasks:
+            reply.append(f"\n**Recommendations ({len(tasks)}):**")
+            icons = {"pending": "○", "in_progress": "◐", "completed": "●", "rejected": "✕"}
+            for t in tasks[:5]:
+                reply.append(f"  {icons.get(t['status'],'?')} T{t['task_order']:02d} {t['description'][:80]}")
+
+    if "report" in msg or "summary" in msg:
+        report = get_latest_report_standalone(incident_no)
+        if report:
+            reply.append("\n**Latest Report:**")
+            for hl in report.get("highlights", [])[:3]:
+                reply.append(f"  * {hl}")
+
+    if not actions and not any(kw in msg for kw in ["recommend", "task", "report", "summary"]):
+        reply.append("\n💡 Try: 'update status to investigating', 'root cause: ...', 'recommendations', 'latest report'")
+
+    return {"reply": "\n".join(reply), "actions": actions}
+
+
+@app.get("/api/incidents/{incident_no}/timeline")
+def incident_timeline(incident_no: str):
+    """Chronological timeline of incident events."""
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    events = [{
+        "time": ticket.get("created_at", ""), "type": "created", "icon": "○",
+        "title": "Ticket Created", "detail": f"Severity: {ticket.get('severity','?')} | {ticket.get('service_name','')}"
+    }]
+
+    reports = get_report_history_standalone(incident_no)
+    for r in reports:
+        events.append({
+            "time": r.get("generated_at", ""), "type": "report", "icon": "📄",
+            "title": f"Report Demo v{r['ticket_version']}",
+            "detail": " | ".join(r.get("highlights", [])[:2])
+        })
+
+    seen = set()
+    for r in reports:
+        v = r["ticket_version"]
+        if v not in seen:
+            seen.add(v)
+            tasks = get_recommendations_standalone(incident_no, ticket_version=v)
+            if tasks:
+                events.append({
+                    "time": "", "type": "tasks", "icon": "📋",
+                    "title": f"{len(tasks)} Tasks Generated",
+                    "detail": f"Version v{v}"
+                })
+
+    events.sort(key=lambda e: e["time"] or "", reverse=True)
+    return {"incident_no": incident_no, "title": ticket.get("title", ""),
+            "status": ticket.get("status", ""), "version": ticket.get("version", 1), "events": events}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
