@@ -1,0 +1,52 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;      -- optional: for fuzzy text matching
+
+CREATE TABLE incident_tickets (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_no     VARCHAR(32)   NOT NULL UNIQUE,
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    root_cause      TEXT,
+    resolution      TEXT,
+    action_plan     TEXT,
+    severity        VARCHAR(16)  NOT NULL CHECK (severity IN ('P0','P1','P2','P3')),
+    service_name    VARCHAR(128) NOT NULL,
+    category        VARCHAR(64)  NOT NULL,
+    status          VARCHAR(16)  NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+    error_type      VARCHAR(64),
+    keywords        TEXT[]       DEFAULT '{}',
+
+    embedding_description VECTOR(384),
+    embedding_root_cause  VECTOR(384),
+
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    resolved_at     TIMESTAMPTZ
+);
+
+-- vector index on description
+CREATE INDEX idx_desc_embedding ON incident_tickets
+    USING ivfflat (embedding_description vector_cosine_ops)
+    WITH (lists = 20);
+
+-- vector index on root_cause (for rerank weighting)
+CREATE INDEX idx_rc_embedding ON incident_tickets
+    USING ivfflat (embedding_root_cause vector_cosine_ops)
+    WITH (lists = 20);
+
+-- full-text search index  (search across title + description + root_cause)
+CREATE INDEX idx_fts ON incident_tickets
+    USING GIN (
+        to_tsvector(
+            'english',
+            coalesce(title,'') || ' ' ||
+            coalesce(description,'') || ' ' ||
+            coalesce(root_cause,'') || ' ' ||
+            coalesce(resolution,'')
+        )
+    );
+
+-- support for structured filtering
+CREATE INDEX idx_service ON incident_tickets (service_name);
+CREATE INDEX idx_category ON incident_tickets (category);
+CREATE INDEX idx_status ON incident_tickets (status);
+CREATE INDEX idx_error_type ON incident_tickets (error_type);

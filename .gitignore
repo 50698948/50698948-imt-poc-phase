@@ -1,0 +1,16 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ide
+.vscode/
+.idea/
+
+# os
+Thumbs.db
+.DS_Store

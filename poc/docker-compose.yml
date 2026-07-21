@@ -1,0 +1,21 @@
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: imt-poc-db
+    environment:
+      POSTGRES_USER: imt
+      POSTGRES_PASSWORD: imt_poc_2024
+      POSTGRES_DB: imt_poc
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imt -d imt_poc"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
