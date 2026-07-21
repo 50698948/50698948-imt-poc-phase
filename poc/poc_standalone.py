@@ -35,6 +35,14 @@ FINAL_TOPK = 5
 RANDOM_SEED = 42
 PROJ_VOCAB = 65536
 
+# ── LLM mode (from env) ──
+LLM_MODE = os.getenv("LLM_MODE", "offline")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_EMBEDDING_MODEL = os.getenv("LLM_EMBEDDING_MODEL", "text-embedding-3-small")
+LLM_EMBEDDING_DIM = int(os.getenv("LLM_EMBEDDING_DIM", "1536"))
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "imt_poc.db")
 
 # =========================================================================
@@ -52,18 +60,44 @@ def _get_proj() -> np.ndarray:
     return _proj
 
 
-def embed(text: str) -> list[float]:
+def embed(text: str | list[str]) -> list[list[float]]:
+    """Auto-switches between offline random projection and OpenAI-compatible API.
+    Always returns list of lists for consistent interface."""
+    single = isinstance(text, str)
+    texts = [text] if single else text
+
+    if LLM_MODE != "offline" and LLM_API_KEY:
+        client = _get_llm_client()
+        resp = client.embeddings.create(model=LLM_EMBEDDING_MODEL, input=texts)
+        result = [d.embedding for d in resp.data]
+        return result[0] if single else result
+
+    # Offline random projection
     proj = _get_proj()
-    tokens = re.findall(r"[a-z0-9]{2,}", text.lower())
-    if not tokens:
-        return [0.0] * EMBEDDING_DIM
-    indices = [int.from_bytes(hashlib.blake2b(t.encode(), digest_size=8).digest(), "big") % PROJ_VOCAB
-               for t in tokens]
-    vec = proj[np.array(indices, dtype=np.int32)].sum(axis=0)
-    norm = np.linalg.norm(vec)
-    if norm > 1e-8:
-        vec /= norm
-    return vec.tolist()
+    result = []
+    for t in texts:
+        tokens = re.findall(r"[a-z0-9]{2,}", t.lower())
+        if not tokens:
+            result.append([0.0] * 384)
+            continue
+        indices = [int.from_bytes(hashlib.blake2b(tok.encode(), digest_size=8).digest(), "big") % PROJ_VOCAB
+                   for tok in tokens]
+        vec = proj[np.array(indices, dtype=np.int32)].sum(axis=0)
+        norm = np.linalg.norm(vec)
+        if norm > 1e-8:
+            vec /= norm
+        result.append(vec.tolist())
+    return result[0] if single else result
+
+
+_llm_client = None
+
+def _get_llm_client():
+    global _llm_client
+    if _llm_client is None and LLM_MODE != "offline":
+        from openai import OpenAI
+        _llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+    return _llm_client
 
 
 def cosine_sim(a, b):
@@ -600,6 +634,27 @@ def generate_action_plan(current_ticket, history_tickets):
     if not history_tickets:
         return "No historical similar tickets found."
 
+    # ── LLM mode: use API ──
+    if LLM_MODE != "offline" and LLM_API_KEY:
+        client = _get_llm_client()
+        h_parts = []
+        for i, t in enumerate(history_tickets, 1):
+            h_parts.append(
+                f"[#{i}] {t.get('incident_no','?')} | {t.get('title','')}\n"
+                f"  RC: {t.get('root_cause','N/A')[:200]}\n  Res: {t.get('resolution','N/A')[:200]}"
+            )
+        prompt = f"""You are a senior SRE. Analyze and produce action plan.
+
+Current: [{current_ticket.get('service_name','')}] {current_ticket.get('title','')}
+{current_ticket.get('description','')[:600]}
+
+History:\n{chr(10).join(h_parts)}
+
+Output: ## 1. Alignment ## 2. Root Cause ## 3. Action Plan (Phase A/B/C) ## 4. Confidence"""
+        resp = client.chat.completions.create(model=LLM_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3)
+        return resp.choices[0].message.content or "(empty)"
+
+    # ── Offline template ──
     lines = []
     lines.append("=" * 70)
     lines.append("RECOMMENDED ACTION PLAN (template-based, offline PoC)")

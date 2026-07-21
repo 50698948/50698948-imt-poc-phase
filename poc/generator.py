@@ -1,105 +1,95 @@
 """
-Template-based action-plan generator (offline PoC fallback).
+Action-plan generator — dual-mode: offline template or LLM-powered.
 
-When LLM is unavailable, generates a structured analysis by
-comparing the current ticket's metadata with historical tickets.
+LLM_MODE="offline" → template-based using matched historical tickets
+LLM_MODE="openai" or "custom" → LLM-generated analysis
 """
 
+from config import LLM_MODE, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
-def generate_action_plan(
-    current_ticket: dict,
-    history_tickets: list[dict],
-) -> str:
-    if not history_tickets:
-        return "No historical similar tickets found. Unable to generate reference-based analysis."
+_llm_client = None
 
+
+def _get_llm_client():
+    global _llm_client
+    if _llm_client is None and LLM_MODE != "offline":
+        from openai import OpenAI
+        _llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+    return _llm_client
+
+
+def _generate_llm(current_ticket: dict, history_tickets: list[dict]) -> str:
+    client = _get_llm_client()
+    history_text_parts = []
+    for i, t in enumerate(history_tickets, 1):
+        history_text_parts.append(
+            f"[Historical #{i}] {t.get('incident_no','?')}\n"
+            f"  Title: {t.get('title','')}\n"
+            f"  Root cause: {t.get('root_cause','N/A')[:200]}\n"
+            f"  Resolution: {t.get('resolution','N/A')[:200]}\n"
+            f"  Action plan: {t.get('action_plan','N/A')[:200]}\n"
+        )
+    prompt = f"""You are a senior SRE. Analyze the current incident using similar historical tickets and produce a recommended action plan.
+
+=== CURRENT INCIDENT ===
+Title: {current_ticket.get('title','')}
+Service: {current_ticket.get('service_name','')}
+Category: {current_ticket.get('category','')}
+Severity: {current_ticket.get('severity','')}
+Error type: {current_ticket.get('error_type','N/A')}
+Description: {current_ticket.get('description','')[:800]}
+
+=== SIMILAR HISTORICAL TICKETS ===
+{chr(10).join(history_text_parts)}
+
+Output sections:
+## 1. Alignment Analysis
+## 2. Root Cause Hypothesis (ordered, with probabilities, citing ticket IDs)
+## 3. Action Plan (Phase A: Emergency / Phase B: Diagnosis / Phase C: Fix)
+## 4. Confidence Assessment (high/medium/low with reasoning)"""
+    resp = client.chat.completions.create(model=LLM_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3)
+    return resp.choices[0].message.content or "(empty)"
+
+
+def _generate_template(current_ticket: dict, history_tickets: list[dict]) -> str:
     lines = []
     lines.append("=" * 70)
     lines.append("RECOMMENDED ACTION PLAN (template-based, offline PoC)")
     lines.append("=" * 70)
-
-    # 1. Alignment Analysis
     lines.append("\n## 1. Alignment Analysis\n")
-    lines.append(
-        f"Current: [{current_ticket.get('service_name', '?')}] "
-        f"{current_ticket.get('title', '')}"
-    )
-    lines.append(f"Category: {current_ticket.get('category', '?')} | "
-                  f"Severity: {current_ticket.get('severity', '?')} | "
-                  f"Error: {current_ticket.get('error_type', '?')}")
-    lines.append("\nTop matching historical tickets:")
+    lines.append(f"Current: [{current_ticket.get('service_name','?')}] {current_ticket.get('title','')}")
     for i, t in enumerate(history_tickets, 1):
-        lines.append(
-            f"  [{i}] {t.get('incident_no','?')} (score={t.get('rerank_score',0):.1f}) "
-            f"— {t.get('title','')}"
-        )
-        if t.get("rerank_reason"):
-            lines.append(f"      {t.get('rerank_reason')}")
-
-    # 2. Root Cause Hypothesis
-    lines.append("\n## 2. Root Cause Hypothesis (by similarity)\n")
+        lines.append(f"  [{i}] {t.get('incident_no','?')} (score={t.get('rerank_score',0):.1f}) — {t.get('title','')}")
+    lines.append("\n## 2. Root Cause Hypothesis\n")
     for i, t in enumerate(history_tickets, 1):
-        prob = max(10, 100 - (i - 1) * 15)
-        lines.append(f"- **Hypothesis {i}** (probability: ~{prob}%)")
-        if t.get("root_cause"):
-            lines.append(f"  {t['root_cause'][:200]}")
-        lines.append(f"  Source: {t.get('incident_no','?')} | "
-                      f"Resolved by: {t.get('resolution','N/A')[:100]}")
-        lines.append("")
-
-    # 3. Recommended Action Plan
-    lines.append("## 3. Recommended Action Plan\n")
-
+        lines.append(f"- **H{i}** (~{max(10,100-(i-1)*15)}%): {t.get('root_cause','N/A')[:200]}")
+        lines.append(f"  Source: {t.get('incident_no','?')}")
+    lines.append("\n## 3. Recommended Action Plan\n")
     lines.append("### Phase A — Emergency Mitigation")
-    lines.append("1. Assess blast radius: identify all affected services/components")
-    lines.append("2. Check recent deployments or config changes in "
-                  f"'{current_ticket.get('service_name', '?')}'")
-    lines.append("3. If specific error type is known, apply the corresponding check "
-                  f"(error_type={current_ticket.get('error_type', '?')})")
-    lines.append("4. Prepare rollback plan if recent deployment is suspected")
-    lines.append("")
-
-    lines.append("### Phase B — Diagnosis & Verification")
-    lines.append("Based on matched historical tickets:")
-    action_items = set()
+    lines.append("1. Assess blast radius / 2. Check recent deployments / 3. Prepare rollback")
+    lines.append("### Phase B — Diagnosis")
+    actions = set()
     for t in history_tickets:
-        if t.get("action_plan"):
-            for line in t["action_plan"].split("\n"):
-                line = line.strip()
-                if line and line[0].isdigit():
-                    action_items.add(line)
-    for i, item in enumerate(sorted(action_items)[:8], 1):
-        lines.append(f"{i}. {item}")
-    lines.append("")
-
+        for line in (t.get("action_plan") or "").split("\n"):
+            if line.strip() and line.strip()[0].isdigit():
+                actions.add(line.strip())
+    for i, a in enumerate(sorted(actions)[:8], 1):
+        lines.append(f"{i}. {a}")
     lines.append("### Phase C — Root Cause Fix")
-    lines.append("1. Apply fix validated in the highest-scoring historical ticket")
     for t in history_tickets[:2]:
         if t.get("resolution"):
-            lines.append(f"   Reference ({t.get('incident_no','?')}): {t['resolution'][:150]}")
-    lines.append("2. Verify fix in staging/test environment before production rollout")
-    lines.append("3. Monitor key metrics for 30min post-fix")
-    lines.append("")
-
-    # 4. Confidence
-    lines.append("## 4. Confidence Assessment")
+            lines.append(f"  Reference ({t.get('incident_no','?')}): {t['resolution'][:150]}")
     top_score = history_tickets[0].get("rerank_score", 0)
-    if top_score >= 70:
-        confidence = "high"
-        note = "Strong root cause alignment with historical ticket(s)"
-    elif top_score >= 40:
-        confidence = "medium"
-        note = "Partial alignment — verify hypothesis manually"
-    else:
-        confidence = "low"
-        note = "Weak alignment — use historical references as suggestions only"
-    lines.append(f"- Overall confidence: **{confidence}**")
-    lines.append(f"- {note}")
-    lines.append(f"- Key sources: {', '.join(t.get('incident_no','?') for t in history_tickets[:3])}")
-
+    conf = "high" if top_score >= 70 else "medium" if top_score >= 40 else "low"
+    lines.append(f"\n## 4. Confidence: **{conf}**")
     lines.append("\n" + "=" * 70)
-    lines.append("NOTE: LLM-based generation unavailable (offline PoC mode).")
-    lines.append("The above is template-based using rule matching & embedding similarity.")
-    lines.append("=" * 70)
-
     return "\n".join(lines)
+
+
+def generate_action_plan(current_ticket: dict, history_tickets: list[dict]) -> str:
+    if not history_tickets:
+        return "No historical similar tickets found."
+    if LLM_MODE == "offline":
+        return _generate_template(current_ticket, history_tickets)
+    else:
+        return _generate_llm(current_ticket, history_tickets)
