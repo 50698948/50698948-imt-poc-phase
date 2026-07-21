@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 const API = "http://localhost:8000";
 
@@ -61,15 +62,16 @@ export default function RetrievePage() {
             <>
               <div className="text-xs text-gray-400 uppercase tracking-wider">Reranked Top-5</div>
               {result.reranked?.map((r: any, i: number) => (
-                <div key={i} className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                <Link key={i} href={`/incident/${r.incident_no}`}
+                  className="block bg-gray-900 border border-gray-800 hover:border-cyan-700 rounded-lg p-3 transition-all hover:bg-gray-800/50 group">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-cyan-400 text-xs font-bold">{r.incident_no}</span>
+                    <span className="text-cyan-400 text-xs font-bold group-hover:text-cyan-300">{r.incident_no}</span>
                     <span className="text-yellow-400 text-xs">{r.rerank_score?.toFixed(1)}</span>
                   </div>
                   <p className="text-gray-300 text-xs">{r.title}</p>
                   <p className="text-gray-600 text-[10px] mt-1">{r.rerank_reason}</p>
                   {r.root_cause && <p className="text-gray-500 text-[10px] mt-1 truncate">RC: {r.root_cause}</p>}
-                </div>
+                </Link>
               ))}
 
               <div className="text-xs text-gray-400 uppercase tracking-wider mt-4">Action Plan</div>
