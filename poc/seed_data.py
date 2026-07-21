@@ -24,7 +24,6 @@ SEED_TICKETS = [
     },
     {
         "incident_no": "INC-2024-0002",
-        "incident_no": "INC-2024-0002",
         "title": "PostgreSQL connection pool exhausted during black-friday",
         "description": "PG connection pool maxed out at 500 connections. New requests failing with 'FATAL: sorry, too many clients already'. Latency p99 went from 80ms to 12s. HikariCP metrics show active connections stuck at max for 20min.",
         "root_cause": "A new deployment introduced N+1 queries in the product-listing endpoint. Each page view spawned 200+ individual queries instead of 1 JOIN. Connection pool drained in 3min under peak traffic.",
