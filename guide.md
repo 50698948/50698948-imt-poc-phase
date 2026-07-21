@@ -7,16 +7,17 @@ Incident Ticket 智能召回与分析系统的完整操作手册。
 ## 目录
 
 1. [环境准备](#1-环境准备)
-2. [启动数据库](#2-启动数据库)
-3. [灌入模拟数据](#3-灌入模拟数据)
-4. [E2E 检索 Pipeline](#4-e2e-检索-pipeline)
-5. [生命周期 Demo](#5-生命周期-demo)
-6. [Leader Report 汇报生成](#6-leader-report-汇报生成)
-7. [Engineer Task Recommendations](#7-engineer-task-recommendations---工程师推荐任务)
-8. [独立模式 — 零依赖运行](#8-独立模式--零依赖运行)
-9. [数据库操作 API](#9-数据库操作-api)
-10. [一键脚本](#10-一键脚本)
-11. [Demo 演示完整操作步骤](#11-demo-演示完整操作步骤)
+2. [快速部署（一键启动所有服务）](#2-快速部署一键启动所有服务)
+3. [启动数据库](#3-启动数据库)
+3. [灌入模拟数据](#4-灌入模拟数据)
+4. [E2E 检索 Pipeline](#5-e2e-检索-pipeline)
+5. [生命周期 Demo](#6-生命周期-demo)
+6. [Leader Report 汇报生成](#7-leader-report-汇报生成)
+7. [Engineer Task Recommendations](#8-engineer-task-recommendations---工程师推荐任务)
+8. [独立模式 — 零依赖运行](#9-独立模式--零依赖运行)
+9. [数据库操作 API](#10-数据库操作-api)
+10. [一键脚本](#11-一键脚本)
+11. [Demo 演示完整操作步骤](#13-demo-演示完整操作步骤)
 12. [常见问题](#12-常见问题)
 
 ---
@@ -41,16 +42,100 @@ pip install --user -r requirements.txt
 ### 1.3 配置环境变量
 
 ```powershell
-# 复制模板
 copy .env.example .env
+```
 
-# 编辑 .env（如果用 OpenAI embedding 才需要填写 API Key）
-# 当前 PoC 使用本地随机投影，不需要 API Key
+**LLM_MODE 说明**（默认 `offline`，无需 API Key）：
+
+| 模式 | 值 | Embedding | Reranker | Generator | 需要 |
+|------|-----|-----------|----------|-----------|------|
+| 离线 | `offline` | 随机投影 (384d) | 余弦相似度 | 模板生成 | 无 |
+| OpenAI | `openai` | text-embedding-3-small | GPT-4o listwise | GPT-4o 分析 | LLM_API_KEY |
+| 自定义 | `custom` | 自定义模型 | 自定义模型 | 自定义模型 | LLM_API_KEY + LLM_BASE_URL |
+
+**切换到 LLM 模式**：编辑 `.env`，取消注释并填写：
+
+```bash
+LLM_MODE=openai
+LLM_API_KEY=sk-your-key-here
+```
+
+**自定义端点示例**（Azure / Ollama / 本地代理）：
+
+```bash
+# Ollama
+LLM_MODE=custom
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=llama3
+LLM_EMBEDDING_MODEL=nomic-embed-text
+LLM_EMBEDDING_DIM=768
 ```
 
 ---
 
-## 2. 启动数据库
+## 2. 快速部署（一键启动所有服务）
+
+### 2.1 方式一：Docker 容器化部署（推荐）
+
+```powershell
+cd C:\claudeWorkspace\IMT
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+自动完成：构建 3 个 Docker 镜像 → 启动 PostgreSQL + Backend + Frontend → 健康检查 → 浏览器打开。
+
+| 命令 | 用途 |
+|------|------|
+| `build.ps1` | 构建 + 启动全栈 |
+| `build.ps1 -Reset` | 清空重建 |
+| `build.ps1 -Prod` | 生产模式（不自动打开浏览器） |
+| `docker compose -f deploy/docker-compose.yml down` | 停止 |
+| `docker compose -f deploy/docker-compose.yml logs -f` | 查看日志 |
+
+**服务架构**：
+
+```
+imt-postgres     :5432    PostgreSQL 18 + pgvector (healthcheck: pg_isready)
+imt-seed         (oneshot) 灌入 49 条数据后退出
+imt-backend      :8000    FastAPI (healthcheck: /api/health)
+imt-frontend     :3000    Nginx → Next.js static export (proxy /api/ → backend)
+```
+
+### 2.2 方式二：本地脚本部署（开发调试）
+
+```powershell
+cd C:\claudeWorkspace\IMT
+powershell -ExecutionPolicy Bypass -File deploy.ps1
+```
+
+| 命令 | 用途 |
+|------|------|
+| `deploy.ps1` | 全栈本地部署（PostgreSQL + Backend + Frontend） |
+| `deploy.ps1 -Quick` | CLI 快速验证 |
+| `deploy.ps1 -Stop` | 停止所有服务 |
+
+### 2.3 手动分步启动
+
+```powershell
+# Terminal 1: 数据库
+cd poc && docker compose up -d && python seed_data.py
+# Terminal 2: Backend API
+python backend\api_server.py
+# Terminal 3: Frontend
+cd frontend && npm run dev
+```
+
+### 2.4 CLI 快速测试
+
+```powershell
+cd poc
+powershell -ExecutionPolicy Bypass -File run_all.ps1
+```
+
+---
+
+## 3. 启动数据库
 
 ### 2.1 启动 PostgreSQL 18 + pgvector
 
@@ -98,7 +183,7 @@ docker compose down -v
 
 ---
 
-## 3. 灌入模拟数据
+## 4. 灌入模拟数据
 
 ### 3.1 灌入 20 条历史 incident ticket
 
@@ -159,7 +244,7 @@ ingest_ticket(
 
 ---
 
-## 4. E2E 检索 Pipeline
+## 5. E2E 检索 Pipeline
 
 ### 4.1 运行完整检索流程
 
@@ -193,7 +278,7 @@ CURRENT_TICKET = {
 
 ---
 
-## 5. 生命周期 Demo
+## 6. 生命周期 Demo
 
 ### 5.1 运行
 
@@ -231,7 +316,7 @@ python demo_lifecycle.py
 
 ---
 
-## 6. Leader Report 汇报生成
+## 7. Leader Report 汇报生成
 
 ### 6.1 自动生成机制
 
@@ -287,7 +372,7 @@ v4  [STATUS] RESOLVED  |  [ROOT CAUSE] N+1 connection pattern...  |  [ACTION] Ro
 
 ---
 
-## 7. Engineer Task Recommendations — 工程师推荐任务
+## 8. Engineer Task Recommendations — 工程师推荐任务
 
 ### 7.1 自动生成机制
 
@@ -344,7 +429,7 @@ in_progress → rejected
 
 ---
 
-## 8. 独立模式 — 零依赖运行
+## 9. 独立模式 — 零依赖运行
 
 ### 8.1 适用场景
 
@@ -382,7 +467,7 @@ python poc_standalone.py
 
 ---
 
-## 9. 数据库操作 API
+## 10. 数据库操作 API
 
 ### 9.1 入库
 
@@ -448,7 +533,7 @@ revise_task(tasks[0]["id"], status="completed", revised_by="david.lin",
 
 ---
 
-## 10. 一键脚本
+## 11. 一键脚本
 
 ```powershell
 cd C:\claudeWorkspace\IMT\poc
@@ -465,7 +550,7 @@ powershell -ExecutionPolicy Bypass -File run_all.ps1
 
 ---
 
-## 11. Demo 演示完整操作步骤
+## 13. Demo 演示完整操作步骤
 
 > 以下是一套完整的演示流程，按 Feature 顺序逐步展示。每条命令均可直接复制运行。
 
@@ -510,17 +595,17 @@ Start-Sleep -Seconds 5
 docker ps --filter "name=imt-poc-db"
 # 期望: Up XX seconds (healthy)
 
-# 4. 灌入模拟数据（35 条：20 resolved + 15 含 investigating/mitigated/open）
+# 4. 灌入模拟数据（49 条）
 python seed_data.py
-# 期望: Seeded 35 tickets. Done.
+# 期望: Seeded 49 tickets. Done.
 ```
 
 **数据概览**（seed 后可验证）：
 
 | 统计 | 数量 |
 |------|------|
-| 总 ticket | 35 |
-| resolved | 28 |
+| 总 ticket | 49 |
+| resolved | 36 |
 | investigating | 4 |
 | mitigated | 1 |
 | open | 1 |
@@ -531,6 +616,10 @@ python seed_data.py
 ---
 
 ### 11.2 Feature 1 — E2E 检索 Pipeline（展示智能召回）
+
+**CLI 方式**：`python main.py`
+
+**Web 方式**：浏览器打开 `http://localhost:3000/retrieve`，填写 incident 信息后点击 Run Retrieval。
 
 ```powershell
 python main.py
@@ -852,7 +941,12 @@ FINAL_TOPK = 5      # 精排后最终返回数
 | `recommend.py` | 任务推荐引擎 | idea.md §10 |
 | `reranker.py` | 余弦精排 | idea.md §6 |
 | `retrieval.py` | RRF 融合 | idea.md §6 |
-| `seed_data.py` | 35 条模拟数据 | guide.md §3 |
+| `seed_data.py` | 49 条模拟数据 | guide.md §3 |
+| `backend/api_server.py` | FastAPI REST 服务 | — |
+| `frontend/src/app/page.tsx` | Dashboard 页面 | — |
+| `frontend/src/app/retrieve/page.tsx` | E2E 检索页面 | guide.md §11.2 |
+| `frontend/src/app/lifecycle/page.tsx` | 生命周期演示页面 | guide.md §11.3 |
+| `frontend/src/app/tasks/page.tsx` | 任务看板页面 | — |
 
 ### A.2 数据库表对齐
 

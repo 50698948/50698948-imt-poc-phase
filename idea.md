@@ -27,8 +27,8 @@
 | status | VARCHAR(16) | open / investigating / mitigated / resolved |
 | error_type | VARCHAR(64) | timeout / OOM / panic / deadlock / ... |
 | keywords | TEXT[] | 提取关键词 |
-| embedding_description | VECTOR(384) | 问题描述向量（PoC 用本地 384 维） |
-| embedding_root_cause | VECTOR(384) | 根因+方案向量（已解决才有） |
+| embedding_description | VECTOR(384) | 问题描述向量（离线 384d，LLM 模式可用 1536d） |
+| embedding_root_cause | VECTOR(384) | 根因+方案向量（同上） |
 | created_at / updated_at / resolved_at | TIMESTAMPTZ | 时间 |
 | version | INT | 更新计数器 |
 
@@ -194,7 +194,9 @@ INCIDENT LEADERSHIP REPORT
 
 新增 `leader_reports` 表，关联到每个 ticket version，存储完整报告文本 + highlights 数组。
 
-### 9.4 集成方式
+### 9.4 实现文件
+
+`leader_report.py`：报告模板引擎 + highlights 自动提取逻辑。
 
 每次 `update_ticket_status()` 调用结束后自动生成并持久化一份报告。
 可通过 `get_latest_report(incident_no)` / `get_report_history(incident_no)` 查询。
@@ -218,7 +220,11 @@ INCIDENT LEADERSHIP REPORT
 
 新增 `recommended_tasks` 表，字段含：task_order, description, source, status (pending/in_progress/completed/rejected), revised_by, revision_note。
 
-### 10.3 人工修订 API
+### 10.3 实现文件
+
+`recommend.py`：任务推荐引擎 — 按 error_type 匹配 SRE playbook 模板，提取历史 action_plan。
+
+### 10.4 人工修订 API
 
 ```python
 from db import revise_task
