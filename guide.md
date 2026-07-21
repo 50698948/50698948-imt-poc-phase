@@ -12,10 +12,11 @@ Incident Ticket 智能召回与分析系统的完整操作手册。
 4. [E2E 检索 Pipeline](#4-e2e-检索-pipeline)
 5. [生命周期 Demo](#5-生命周期-demo)
 6. [Leader Report 汇报生成](#6-leader-report-汇报生成)
-7. [独立模式 — 零依赖运行](#7-独立模式--零依赖运行)
-8. [数据库操作 API](#8-数据库操作-api)
-9. [一键脚本](#9-一键脚本)
-10. [常见问题](#10-常见问题)
+7. [Engineer Task Recommendations](#7-engineer-task-recommendations---工程师推荐任务)
+8. [独立模式 — 零依赖运行](#8-独立模式--零依赖运行)
+9. [数据库操作 API](#9-数据库操作-api)
+10. [一键脚本](#10-一键脚本)
+11. [常见问题](#11-常见问题)
 
 ---
 
@@ -286,7 +287,68 @@ v4  [STATUS] RESOLVED  |  [ROOT CAUSE] N+1 connection pattern...  |  [ACTION] Ro
 
 ---
 
-## 7. 独立模式 — 零依赖运行
+## 7. Engineer Task Recommendations — 工程师推荐任务
+
+### 7.1 自动生成机制
+
+每次调用 `update_ticket_status()` 后，除 Report 外还会自动生成推荐任务列表。
+
+### 7.2 任务来源与优先级
+
+| 优先级 | 来源 | 数量 | 示例 |
+|--------|------|------|------|
+| P1 | error_type 模板 | 3 条 | "Check connection pool metrics for payment-service" |
+| P2 | SRE Playbook 通用 | 4 条 | "Assess blast radius / Check recent deployments" |
+| P3 | 相似历史 ticket action_plan | 动态 | 提取历史方案中的操作步骤 |
+| P4 | 根因确认 | 1 条 | "Confirm root cause hypothesis: ..." |
+
+### 7.3 查询任务
+
+```python
+from db import get_recommendations
+
+# 获取最新版本的推荐任务
+tasks = get_recommendations("INC-2025-0001")
+for t in tasks:
+    print(f"[{t['status']}] T{t['task_order']:02d} {t['description'][:80]}")
+    print(f"    source: {t['source']}")
+```
+
+### 7.4 人工修订任务
+
+```python
+from db import revise_task
+
+# 标记为进行中
+revise_task(task_id, status="in_progress", revised_by="david.lin",
+            revision_note="Checked pool metrics — active connections at 50/50")
+
+# 标记为已完成
+revise_task(task_id, status="completed", revised_by="david.lin",
+            revision_note="Verified deployment diff — no changes found")
+
+# 添加自定义备注
+revise_task(task_id, revision_note="Escalating to DB team for index analysis")
+
+# 拒绝不适用的推荐
+revise_task(task_id, status="rejected", revision_note="Not applicable — no connection pool used")
+```
+
+### 7.5 状态流转
+
+```
+pending → in_progress → completed
+pending → rejected
+in_progress → rejected
+```
+
+### 7.6 演示话术
+
+> "除了向 Leader 汇报，系统还面向一线工程师生成可操作的任务推荐——按错误类型匹配 SRE playbook，从历史 ticket 的 action_plan 中提取步骤。每个 task 都可以被人工修订：标记完成、添加备注、或拒绝不适用项。这就是人机协作的 incident 处理流程。"
+
+---
+
+## 8. 独立模式 — 零依赖运行
 
 ### 7.1 适用场景
 
@@ -294,13 +356,13 @@ v4  [STATUS] RESOLVED  |  [ROOT CAUSE] N+1 connection pattern...  |  [ACTION] Ro
 - 网络受限（无法拉取镜像）
 - 快速验证算法逻辑
 
-### 7.2 运行
+### 8.2 运行
 
 ```powershell
 python poc_standalone.py
 ```
 
-### 7.3 实现细节
+### 8.3 实现细节
 
 | 组件 | Docker 版 | 独立版 |
 |------|----------|--------|
@@ -313,9 +375,9 @@ python poc_standalone.py
 | 行动计划 | 模板生成 | 同 |
 | Leader Report | PostgreSQL | SQLite |
 
-### 7.4 数据库文件
+### 8.4 数据库文件
 
-独立版生成 `poc/imt_poc.db`（SQLite 文件）。删除此文件即可重置：
+独立版生成 `poc/imt_poc.db`（SQLite 文件）。删除即可重置：
 
 ```powershell
 del imt_poc.db
@@ -324,7 +386,7 @@ python poc_standalone.py
 
 ---
 
-## 8. 数据库操作 API
+## 9. 数据库操作 API
 
 ### 8.1 入库
 
@@ -382,7 +444,7 @@ print(f"Total reports: {len(history)}")
 
 ---
 
-## 9. 一键脚本
+## 10. 一键脚本
 
 ```powershell
 cd C:\claudeWorkspace\IMT\poc
@@ -399,7 +461,7 @@ powershell -ExecutionPolicy Bypass -File run_all.ps1
 
 ---
 
-## 10. 常见问题
+## 11. 常见问题
 
 ### Q: Docker 容器无法启动
 

@@ -196,3 +196,37 @@ INCIDENT LEADERSHIP REPORT
 
 每次 `update_ticket_status()` 调用结束后自动生成并持久化一份报告。
 可通过 `get_latest_report(incident_no)` / `get_report_history(incident_no)` 查询。
+
+---
+
+## 10. Engineer Task Recommendations — 可人工修订的任务推荐
+
+每次 ticket 更新时，自动为处理工程师生成推荐任务列表。工程师可以标记完成/拒绝/添加备注。
+
+### 10.1 任务生成规则
+
+| 来源 | 示例 | 优先级 |
+|------|------|--------|
+| error_type 模板 | "Check connection pool metrics for {service}" | 最高 (3条) |
+| SRE playbook 通用 | "Assess blast radius / Check recent deployments" | 中 (4条) |
+| 相似历史 ticket action_plan | 提取历史 solution 中的操作步骤 | 低 |
+| 当前根因确认 | "Confirm root cause hypothesis: ..." | 有 root_cause 时追加 |
+
+### 10.2 数据库
+
+新增 `recommended_tasks` 表，字段含：task_order, description, source, status (pending/in_progress/completed/rejected), revised_by, revision_note。
+
+### 10.3 人工修订 API
+
+```python
+from db import revise_task
+revise_task(task_id, status="completed", revised_by="david.lin", revision_note="Verified pool metrics — back to normal")
+```
+
+### 10.4 数据表
+
+| 表 | 用途 |
+|------|------|
+| `incident_tickets` | 核心 ticket 数据 + 向量 |
+| `leader_reports` | 汇报报告（每版本一份） |
+| `recommended_tasks` | 推荐任务（可人工修订） |

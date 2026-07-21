@@ -77,5 +77,29 @@ class LeaderReport(Base):
     )
 
 
+class RecommendedTask(Base):
+    __tablename__ = "recommended_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID, primary_key=True, server_default=sa_text("gen_random_uuid()")
+    )
+    incident_no: Mapped[str] = mapped_column(
+        String(32), ForeignKey("incident_tickets.incident_no"), nullable=False,
+    )
+    ticket_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    revised_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    revision_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=sa_text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=sa_text("now()"), onupdate=sa_text("now()")
+    )
+
+
 def get_session() -> Session:
     return Session(engine)

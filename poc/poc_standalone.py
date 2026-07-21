@@ -114,6 +114,21 @@ CREATE TABLE IF NOT EXISTS leader_reports (
     generated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_reports_inc ON leader_reports(incident_no, ticket_version);
+
+CREATE TABLE IF NOT EXISTS recommended_tasks (
+    id TEXT PRIMARY KEY,
+    incident_no TEXT NOT NULL,
+    ticket_version INTEGER NOT NULL,
+    task_order INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    source TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    revised_by TEXT,
+    revision_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_inc ON recommended_tasks(incident_no, ticket_version);
 """
 
 
@@ -298,6 +313,8 @@ def update_ticket(incident_no: str, **fields) -> dict | None:
         conn.execute(
             "INSERT INTO leader_reports(id, incident_no, ticket_version, content, highlights) VALUES(?,?,?,?,?)",
             (str(uuid.uuid4()), incident_no, ver, content, json.dumps(highlights)))
+        tasks = _generate_recommendations(updated, reranked)
+        _save_recommendations(conn, incident_no, ver, tasks)
         conn.commit()
     conn.close()
     return get_ticket(incident_no)
@@ -425,6 +442,111 @@ def get_report_history_standalone(incident_no):
     conn.close()
     return [{"ticket_version": r["ticket_version"], "highlights": json.loads(r["highlights"]),
              "generated_at": r["generated_at"]} for r in rows]
+
+
+# ── Engineer Task Recommendations ──
+
+TASK_TEMPLATES = {
+    "timeout": [
+        "Check connection pool metrics for {service_name}",
+        "Review slow query/request logs for {service_name}",
+        "Verify recent deployment diff for changes to {service_name}",
+        "Check downstream service latency (traces) for {service_name}",
+    ],
+    "OOM": [
+        "Capture heap dump / memory profile of {service_name}",
+        "Check if recent deployment increased memory footprint",
+        "Review GC logs for leak patterns in {service_name}",
+    ],
+    "deadlock": [
+        "Capture deadlock logs from database",
+        "Audit transaction lock ordering in {service_name}",
+        "Add retry with exponential backoff for deadlock-prone operations",
+    ],
+    "race_condition": [
+        "Identify shared mutable state in {service_name} handlers",
+        "Audit concurrent write paths to the same data records",
+        "Add pessimistic locking (SELECT FOR UPDATE) or CAS pattern",
+    ],
+    "resource_exhaustion": [
+        "Identify exhausted resource (disk/memory/connections)",
+        "Check system resource limits and current usage",
+        "Review auto-scaling policies for {service_name}",
+    ],
+    "auth_error": [
+        "Check certificate/token expiry dates for {service_name}",
+        "Verify IAM roles and permissions",
+        "Review authentication service health",
+    ],
+    "rate_limit": [
+        "Check current rate-limit configuration for {service_name}",
+        "Identify triggering client/endpoint",
+        "Review traffic pattern changes",
+    ],
+}
+
+DEFAULT_TASKS = [
+    "Assess blast radius: identify all affected services",
+    "Check recent deployments/config changes for {service_name}",
+    "Collect logs, metrics, and traces for {service_name}",
+    "Set up monitoring dashboard for {service_name} key metrics",
+]
+
+
+def _generate_recommendations(ticket, similar):
+    tasks = []
+    order = 1
+    et = ticket.get("error_type", "")
+    svc = ticket.get("service_name", "unknown")
+
+    for tpl in TASK_TEMPLATES.get(et, [])[:3]:
+        tasks.append({"task_order": order, "description": tpl.format(service_name=svc),
+                       "source": f"best-practice/{et}"})
+        order += 1
+    for tpl in DEFAULT_TASKS[:4]:
+        tasks.append({"task_order": order, "description": tpl.format(service_name=svc),
+                       "source": "sre-playbook"})
+        order += 1
+    seen = set()
+    for sim in similar[:2]:
+        ap = sim.get("action_plan", "")
+        for line in ap.split("\n"):
+            line = line.strip()
+            if not line or not line[0].isdigit():
+                continue
+            cl = line.split(". ", 1)[-1] if ". " in line else line[2:].strip()
+            if cl[:50] not in seen and len(tasks) < 8:
+                seen.add(cl[:50])
+                tasks.append({"task_order": order, "description": cl[:200],
+                               "source": sim.get("incident_no", "?")})
+                order += 1
+    if ticket.get("root_cause"):
+        tasks.append({"task_order": order, "description": "Confirm root cause: " + ticket["root_cause"][:150],
+                       "source": "current-investigation"})
+    return tasks
+
+
+def _save_recommendations(conn, incident_no, ver, tasks):
+    conn.execute("DELETE FROM recommended_tasks WHERE incident_no=? AND ticket_version=?",
+                 (incident_no, ver))
+    for t in tasks:
+        conn.execute(
+            "INSERT INTO recommended_tasks(id, incident_no, ticket_version, task_order, description, source) VALUES(?,?,?,?,?,?)",
+            (str(uuid.uuid4()), incident_no, ver, t["task_order"], t["description"], t.get("source")))
+
+
+def get_recommendations_standalone(incident_no, ticket_version=None):
+    conn = get_db()
+    if ticket_version is None:
+        row = conn.execute(
+            "SELECT MAX(ticket_version) FROM recommended_tasks WHERE incident_no=?",
+            (incident_no,)).fetchone()
+        ticket_version = row[0] if row and row[0] else 0
+    rows = conn.execute(
+        "SELECT * FROM recommended_tasks WHERE incident_no=? AND ticket_version=? ORDER BY task_order",
+        (incident_no, ticket_version)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 # =========================================================================
 # Generator (same logic as generator.py)
@@ -638,11 +760,19 @@ def main():
         reranked = rerank(ticket, candidates)
         print_rerank(reranked, stage["stage"])
 
-        # ── Show leader report highlights ──
+        # ── Show report demo highlights ──
         highlights = _build_highlights(ticket, reranked)
-        print(f"\n  >>> LEADER REPORT HIGHLIGHTS (v{ ticket['version']}) <<<")
+        print(f"\n  >>> REPORT DEMO (v{ ticket['version']}) <<<")
         for hl in highlights:
             print(f"      * {hl}")
+
+        # ── Show recommended tasks ──
+        rec_tasks = _generate_recommendations(ticket, reranked)
+        if rec_tasks:
+            print(f"\n  >>> RECOMMENDED TASKS ({len(rec_tasks)} items) <<<")
+            for t in rec_tasks:
+                print(f"      [ ] T{t['task_order']:02d}  {t['description'][:90]}")
+                print(f"           src: {t.get('source','?')}")
 
         ts = [r.get("rerank_score", 0) for r in reranked[:5]]
         avg = sum(ts) / max(len(ts), 1) if ts else 0
@@ -664,7 +794,7 @@ def main():
     print("  progressively improving rerank scores across the incident lifecycle.")
 
     # ── Report History ──
-    section("Leader Report History — How Reports Evolve")
+    section("Report Demo History — How Reports Evolve")
     reports = get_report_history_standalone("INC-2025-0001")
     for r in reports:
         print(f"\n  [v{r['ticket_version']}] {r.get('generated_at','')[:16]}")
@@ -672,7 +802,20 @@ def main():
             print(f"    * {hl}")
     print("\n  Key insight: Every ticket update auto-generates a leadership")
     print("  report capturing state, impact, and 3-5 key highlights.")
-    print("  Reports evolve as the incident matures (triage → root cause → resolved).")
+
+    # ── Task History ──
+    section("Recommended Tasks History — Human-Revisable Engineer Tasks")
+    for ver in sorted(set(r["ticket_version"] for r in reports)):
+        tasks = get_recommendations_standalone("INC-2025-0001", ticket_version=ver)
+        if tasks:
+            print(f"\n  [v{ver}] {len(tasks)} tasks:")
+            for t in tasks:
+                icon = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]", "rejected": "[R]"}.get(t["status"], "[ ]")
+                print(f"    {icon} T{t['task_order']:02d} {t['description'][:100]}")
+                print(f"         src: {t.get('source','?')}")
+    print("\n  Key insight: Recommendations evolve with each ticket update.")
+    print("  Engineers can revise tasks via the revise_task() API — mark")
+    print("  as in_progress, completed, or rejected with revision notes.")
 
     section("PoC Complete — All checks passed")
 
