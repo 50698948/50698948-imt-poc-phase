@@ -119,3 +119,42 @@ RRF( doc ) = Σ ( 1 / (k + rank_i) )   , k = 60
 2. **RRF 融合三路优于纯向量检索**（消融实验）
 3. **LLM 精排能识别“描述相似但根因不同”的 case**（构造易混淆样本测试）
 4. **Query Expansion 能提升 Recall**（对比单次 vs 多次查询的 Recall@K）
+
+---
+
+## 8. Ticket 生命周期与向量动态更新
+
+Incident ticket 随 event 持续发生而不断更新（description/root_cause/resolution），
+embedding 必须随之刷新才能保证召回质量不退化。
+
+### 8.1 新增字段
+
+| 字段 | 作用 |
+|------|------|
+| `updated_at` | 记录最后更新时间 |
+| `version` | 计数器，每次更新 +1 |
+| `status` 扩展 | `open → investigating → mitigated → resolved` 四态流转 |
+
+### 8.2 更新 API（`db.py`）
+
+| 函数 | 行为 |
+|------|------|
+| `update_ticket_description(no, text)` | 更新描述 + 自动重新 embed description |
+| `update_ticket_root_cause(no, text)` | 更新根因 + 自动重新 embed root_cause |
+| `update_ticket_resolution(no, text)` | 更新方案 + 自动重新 embed root_cause+resolution |
+| `update_ticket_status(no, status, ...)` | 状态转移 + 可选附带更新描述/根因/方案并 re-embed |
+
+### 8.3 生命周期 Demo（`demo_lifecycle.py`）
+
+模拟一个真实 incident 从模糊告警到完整解决的演进过程：
+
+```
+Stage 0 (T+0min):  模糊描述，仅 "payment service failing" → 召回质量低
+Stage 1 (T+10min): SRE 补充详情（线程/连接池指标）→ 召回质量提升
+Stage 2 (T+45min): 根因定位（N+1 连接模式）→ embedding_root_cause 精准命中历史
+Stage 3 (T+90min): 解决 + resolution 入库 → status=resolved, 完整闭环
+```
+
+每个阶段输出 Top-5 召回结果 + 最终汇总表展示 score 随阶段递增的趋势。
+
+运行方式：`python demo_lifecycle.py`

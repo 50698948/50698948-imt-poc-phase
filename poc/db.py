@@ -285,5 +285,153 @@ def _ticket_to_dict(t: IncidentTicket) -> dict:
         "category": t.category,
         "status": t.status,
         "error_type": t.error_type,
+        "version": t.version,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
         "similarity": 0.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Update (lifecycle) — re-embed on semantic content change
+# ---------------------------------------------------------------------------
+
+def update_ticket_description(incident_no: str, new_description: str) -> dict | None:
+    """Update ticket description and regenerate its embedding.
+
+    Returns the updated ticket dict, or None if not found.
+    """
+    from sqlalchemy import update as sa_update
+    with get_session() as s, s.begin():
+        stmt = (
+            sa_update(IncidentTicket)
+            .where(IncidentTicket.incident_no == incident_no)
+            .values(
+                description=new_description,
+                embedding_description=embed(
+                    _get_ticket_title(s, incident_no) + " " + new_description
+                )[0],
+                version=IncidentTicket.version + 1,
+            )
+        )
+        s.execute(stmt)
+    return get_ticket_by_incident_no(incident_no)
+
+
+def update_ticket_root_cause(incident_no: str, root_cause: str) -> dict | None:
+    """Update root_cause and re-embed root_cause+resolution vector."""
+    from sqlalchemy import update as sa_update, select
+    with get_session() as s, s.begin():
+        ticket = s.execute(
+            select(IncidentTicket).where(IncidentTicket.incident_no == incident_no)
+        ).scalar_one_or_none()
+        if ticket is None:
+            return None
+
+        resolution = ticket.resolution or ""
+        rc_vec = embed(root_cause + " " + resolution)[0]
+
+        stmt = (
+            sa_update(IncidentTicket)
+            .where(IncidentTicket.incident_no == incident_no)
+            .values(
+                root_cause=root_cause,
+                embedding_root_cause=rc_vec,
+                version=IncidentTicket.version + 1,
+            )
+        )
+        s.execute(stmt)
+    return get_ticket_by_incident_no(incident_no)
+
+
+def update_ticket_resolution(incident_no: str, resolution: str) -> dict | None:
+    """Update resolution and re-embed root_cause+resolution vector."""
+    from sqlalchemy import update as sa_update, select
+    with get_session() as s, s.begin():
+        ticket = s.execute(
+            select(IncidentTicket).where(IncidentTicket.incident_no == incident_no)
+        ).scalar_one_or_none()
+        if ticket is None:
+            return None
+
+        root_cause = ticket.root_cause or ""
+        rc_vec = embed(root_cause + " " + resolution)[0]
+
+        stmt = (
+            sa_update(IncidentTicket)
+            .where(IncidentTicket.incident_no == incident_no)
+            .values(
+                resolution=resolution,
+                embedding_root_cause=rc_vec,
+                version=IncidentTicket.version + 1,
+            )
+        )
+        s.execute(stmt)
+    return get_ticket_by_incident_no(incident_no)
+
+
+def update_ticket_status(
+    incident_no: str,
+    new_status: str,
+    *,
+    description: str | None = None,
+    root_cause: str | None = None,
+    resolution: str | None = None,
+    severity: str | None = None,
+    error_type: str | None = None,
+) -> dict | None:
+    """Transition ticket status and optionally update related fields.
+
+    Re-embeds description if provided.  Re-embeds root_cause if root_cause
+    or resolution changes.
+    """
+    from sqlalchemy import update as sa_update, select
+    with get_session() as s, s.begin():
+        ticket = s.execute(
+            select(IncidentTicket).where(IncidentTicket.incident_no == incident_no)
+        ).scalar_one_or_none()
+        if ticket is None:
+            return None
+
+        values: dict = {"status": new_status, "version": ticket.version + 1}
+
+        if description is not None:
+            values["description"] = description
+            values["embedding_description"] = embed(
+                ticket.title + " " + description
+            )[0]
+
+        rc = root_cause if root_cause is not None else ticket.root_cause
+        res = resolution if resolution is not None else ticket.resolution
+        if root_cause is not None or resolution is not None:
+            values["embedding_root_cause"] = embed(
+                (rc or "") + " " + (res or "")
+            )[0]
+
+        if root_cause is not None:
+            values["root_cause"] = root_cause
+        if resolution is not None:
+            values["resolution"] = resolution
+        if severity is not None:
+            values["severity"] = severity
+        if error_type is not None:
+            values["error_type"] = error_type
+
+        if new_status == "resolved" and ticket.resolved_at is None:
+            values["resolved_at"] = datetime.now(timezone.utc)
+
+        stmt = (
+            sa_update(IncidentTicket)
+            .where(IncidentTicket.incident_no == incident_no)
+            .values(**values)
+        )
+        s.execute(stmt)
+    return get_ticket_by_incident_no(incident_no)
+
+
+def _get_ticket_title(session, incident_no: str) -> str:
+    from sqlalchemy import select
+    row = session.execute(
+        select(IncidentTicket.title).where(IncidentTicket.incident_no == incident_no)
+    ).scalar()
+    return row or ""
