@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from config import VECTOR_TOPK, FTS_TOPK, STRUCT_TOPK
 from embedding import embed
-from models import IncidentTicket, get_session
+from models import IncidentTicket, LeaderReport, RecommendedTask, get_session
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +426,24 @@ def update_ticket_status(
             .values(**values)
         )
         s.execute(stmt)
-    return get_ticket_by_incident_no(incident_no)
+
+    # ── Auto-generate leader report + recommendations after every status update ──
+    updated = get_ticket_by_incident_no(incident_no)
+    if updated:
+        from leader_report import generate_leader_report, extract_highlights
+        from recommend import generate_recommendations
+        from retrieval import retrieve as _retrieve
+        from reranker import rerank as _rerank
+        _candidates = _retrieve(updated)
+        _candidates = [c for c in _candidates if c.get("incident_no") != incident_no]
+        _reranked = _rerank(updated, _candidates)
+        _content = generate_leader_report(updated, _reranked)
+        _hl = extract_highlights(updated, _reranked)
+        save_leader_report(incident_no, updated["version"], _content, _hl)
+        _tasks = generate_recommendations(updated, _reranked)
+        save_recommendations(incident_no, updated["version"], _tasks)
+
+    return updated
 
 
 def _get_ticket_title(session, incident_no: str) -> str:
@@ -435,3 +452,168 @@ def _get_ticket_title(session, incident_no: str) -> str:
         select(IncidentTicket.title).where(IncidentTicket.incident_no == incident_no)
     ).scalar()
     return row or ""
+
+
+# ---------------------------------------------------------------------------
+# Leader Reports
+# ---------------------------------------------------------------------------
+
+def save_leader_report(incident_no: str, ticket_version: int,
+                       content: str, highlights: list[str]) -> uuid.UUID:
+    """Persist a leader report for the given ticket version."""
+    report = LeaderReport(
+        incident_no=incident_no,
+        ticket_version=ticket_version,
+        content=content,
+        highlights=highlights,
+    )
+    with get_session() as s, s.begin():
+        s.add(report)
+        s.flush()
+        return report.id
+
+
+def get_latest_report(incident_no: str) -> dict | None:
+    """Return the most recent leader report for a ticket."""
+    from sqlalchemy import select
+    with get_session() as s:
+        stmt = (
+            select(LeaderReport)
+            .where(LeaderReport.incident_no == incident_no)
+            .order_by(LeaderReport.ticket_version.desc())
+            .limit(1)
+        )
+        r = s.execute(stmt).scalar_one_or_none()
+        if r is None:
+            return None
+        return {"id": str(r.id), "incident_no": r.incident_no,
+                "ticket_version": r.ticket_version, "content": r.content,
+                "highlights": r.highlights,
+                "generated_at": r.generated_at.isoformat() if r.generated_at else None}
+
+
+def get_report_history(incident_no: str) -> list[dict]:
+    """Return all leader reports for a ticket, oldest first."""
+    from sqlalchemy import select
+    with get_session() as s:
+        stmt = (
+            select(LeaderReport)
+            .where(LeaderReport.incident_no == incident_no)
+            .order_by(LeaderReport.ticket_version.asc())
+        )
+        rows = s.execute(stmt).scalars().all()
+        return [{"id": str(r.id), "incident_no": r.incident_no,
+                 "ticket_version": r.ticket_version, "content": r.content,
+                 "highlights": r.highlights,
+                 "generated_at": r.generated_at.isoformat() if r.generated_at else None}
+                for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Engineer Task Recommendations
+# ---------------------------------------------------------------------------
+
+def save_recommendations(incident_no: str, ticket_version: int,
+                         tasks: list[dict]) -> list[uuid.UUID]:
+    """Persist recommended tasks for the given ticket version.
+
+    Clears previous recommendations for the same incident_no + version
+    before inserting the new batch.
+    """
+    from sqlalchemy import delete as sa_delete
+    with get_session() as s, s.begin():
+        s.execute(
+            sa_delete(RecommendedTask).where(
+                RecommendedTask.incident_no == incident_no,
+                RecommendedTask.ticket_version == ticket_version,
+            )
+        )
+        ids = []
+        for t in tasks:
+            task = RecommendedTask(
+                incident_no=incident_no,
+                ticket_version=ticket_version,
+                task_order=t["task_order"],
+                description=t["description"],
+                source=t.get("source"),
+                status="pending",
+            )
+            s.add(task)
+            s.flush()
+            ids.append(task.id)
+        return ids
+
+
+def get_recommendations(incident_no: str,
+                        ticket_version: int | None = None) -> list[dict]:
+    """Return recommendations for a ticket, optionally filtered by version.
+
+    If ticket_version is None, returns the latest version's recommendations.
+    """
+    from sqlalchemy import select
+    with get_session() as s:
+        if ticket_version is None:
+            sub = (
+                select(RecommendedTask.ticket_version)
+                .where(RecommendedTask.incident_no == incident_no)
+                .order_by(RecommendedTask.ticket_version.desc())
+                .limit(1)
+                .scalar_subquery()
+            )
+            stmt = (
+                select(RecommendedTask)
+                .where(
+                    RecommendedTask.incident_no == incident_no,
+                    RecommendedTask.ticket_version == sub,
+                )
+                .order_by(RecommendedTask.task_order)
+            )
+        else:
+            stmt = (
+                select(RecommendedTask)
+                .where(
+                    RecommendedTask.incident_no == incident_no,
+                    RecommendedTask.ticket_version == ticket_version,
+                )
+                .order_by(RecommendedTask.task_order)
+            )
+        rows = s.execute(stmt).scalars().all()
+        return [_task_to_dict(r) for r in rows]
+
+
+def revise_task(task_id: str, **fields) -> dict | None:
+    """Allow a human to revise a recommended task.
+
+    Acceptable fields: status, description, revision_note, revised_by.
+    """
+    allowed = {"status", "description", "revision_note", "revised_by"}
+    values = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not values:
+        return None
+
+    from sqlalchemy import update as sa_update
+    with get_session() as s, s.begin():
+        stmt = (
+            sa_update(RecommendedTask)
+            .where(RecommendedTask.id == uuid.UUID(task_id))
+            .values(**values)
+        )
+        s.execute(stmt)
+        task = s.get(RecommendedTask, uuid.UUID(task_id))
+        return _task_to_dict(task) if task else None
+
+
+def _task_to_dict(t: RecommendedTask) -> dict:
+    return {
+        "id": str(t.id),
+        "incident_no": t.incident_no,
+        "ticket_version": t.ticket_version,
+        "task_order": t.task_order,
+        "description": t.description,
+        "source": t.source,
+        "status": t.status,
+        "revised_by": t.revised_by,
+        "revision_note": t.revision_note,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+    }

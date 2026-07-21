@@ -53,3 +53,31 @@ CREATE INDEX idx_service ON incident_tickets (service_name);
 CREATE INDEX idx_category ON incident_tickets (category);
 CREATE INDEX idx_status ON incident_tickets (status);
 CREATE INDEX idx_error_type ON incident_tickets (error_type);
+
+-- leader / executive reports — generated per-update snapshot
+CREATE TABLE leader_reports (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_no     VARCHAR(32)   NOT NULL REFERENCES incident_tickets(incident_no),
+    ticket_version  INT           NOT NULL,
+    content         TEXT          NOT NULL,
+    highlights      TEXT[]        NOT NULL DEFAULT '{}',
+    generated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_reports_incident ON leader_reports (incident_no, ticket_version);
+
+-- engineer task recommendations — generated per update, human-revisable
+CREATE TABLE recommended_tasks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_no     VARCHAR(32)   NOT NULL REFERENCES incident_tickets(incident_no),
+    ticket_version  INT           NOT NULL,
+    task_order      INT           NOT NULL,
+    description     TEXT          NOT NULL,
+    source          VARCHAR(32),
+    status          VARCHAR(16)   NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','in_progress','completed','rejected')),
+    revised_by      VARCHAR(64),
+    revision_note   TEXT,
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_tasks_incident ON recommended_tasks (incident_no, ticket_version);

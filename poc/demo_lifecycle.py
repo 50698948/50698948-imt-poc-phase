@@ -19,6 +19,9 @@ from db import (
     ingest_ticket,
     update_ticket_status,
     get_ticket_by_incident_no,
+    get_latest_report,
+    get_report_history,
+    get_recommendations,
 )
 from retrieval import retrieve
 from reranker import rerank
@@ -193,6 +196,23 @@ def main():
 
         print_rerank_table(reranked, stage["stage"])
 
+        # ── Show generated report demo ──
+        latest_report = get_latest_report(stage["incident_no"])
+        if latest_report:
+            print(f"\n  >>> REPORT DEMO (v{latest_report['ticket_version']}) <<<")
+            for hl in latest_report.get("highlights", []):
+                print(f"      * {hl}")
+
+        # ── Show recommended tasks ──
+        tasks = get_recommendations(stage["incident_no"])
+        if tasks:
+            print(f"\n  >>> RECOMMENDED TASKS (v{ tasks[0]['ticket_version']}) <<<")
+            for t in tasks:
+                status_icon = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]", "rejected": "[R]"}.get(t["status"], "[ ]")
+                print(f"      {status_icon} T{t['task_order']:02d}  {t['description'][:90]}")
+                if t.get("source"):
+                    print(f"           src: {t['source']}")
+
         # ── Record for history ──
         top5_nos = [r.get("incident_no", "?") for r in reranked[:5]]
         top5_scores = [round(r.get("rerank_score", 0), 1) for r in reranked[:5]]
@@ -242,6 +262,39 @@ def main():
     print("=" * 80)
     print("Lifecycle Demo Complete.")
     print("=" * 80)
+
+    # ── Report demo history summary ──
+    print("\n")
+    print("=" * 80)
+    print("REPORT DEMO HISTORY — How Reports Evolve Across Updates")
+    print("=" * 80)
+    reports = get_report_history("INC-2025-0001")
+    for i, r in enumerate(reports, 1):
+        print(f"\n  [v{r['ticket_version']}] {r.get('generated_at','')[:16]}")
+        for hl in r.get("highlights", []):
+            print(f"    * {hl}")
+
+    # ── Task recommendation history ──
+    print("\n")
+    print("=" * 80)
+    print("RECOMMENDED TASKS HISTORY — Human-Revisable Engineer Tasks")
+    print("=" * 80)
+    task_versions = set()
+    for r in reports:
+        ver = r["ticket_version"]
+        if ver not in task_versions:
+            task_versions.add(ver)
+            tasks = get_recommendations("INC-2025-0001", ticket_version=ver)
+            if tasks:
+                print(f"\n  [v{ver}] {len(tasks)} tasks — status: pending unless revised")
+                for t in tasks:
+                    status_icon = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]", "rejected": "[R]"}.get(t["status"], "[ ]")
+                    print(f"    {status_icon} T{t['task_order']:02d} {t['description'][:100]}")
+                    if t.get("source"):
+                        print(f"         source: {t['source']}")
+    print("\n  Key insight: Recommendations evolve with each ticket update.")
+    print("  Engineers can mark tasks as in_progress/completed/rejected,")
+    print("  add revision notes, or add custom tasks via revise_task().")
 
 
 if __name__ == "__main__":

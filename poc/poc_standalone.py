@@ -104,6 +104,31 @@ CREATE INDEX IF NOT EXISTS idx_service ON incident_tickets(service_name);
 CREATE INDEX IF NOT EXISTS idx_category ON incident_tickets(category);
 CREATE INDEX IF NOT EXISTS idx_status ON incident_tickets(status);
 CREATE INDEX IF NOT EXISTS idx_error_type ON incident_tickets(error_type);
+
+CREATE TABLE IF NOT EXISTS leader_reports (
+    id TEXT PRIMARY KEY,
+    incident_no TEXT NOT NULL,
+    ticket_version INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    highlights TEXT DEFAULT '[]',
+    generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reports_inc ON leader_reports(incident_no, ticket_version);
+
+CREATE TABLE IF NOT EXISTS recommended_tasks (
+    id TEXT PRIMARY KEY,
+    incident_no TEXT NOT NULL,
+    ticket_version INTEGER NOT NULL,
+    task_order INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    source TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    revised_by TEXT,
+    revision_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_inc ON recommended_tasks(incident_no, ticket_version);
 """
 
 
@@ -276,6 +301,21 @@ def update_ticket(incident_no: str, **fields) -> dict | None:
     """, (ticket.get("title", ""), ticket.get("description", ""),
           ticket.get("root_cause", ""), ticket.get("resolution", ""), incident_no))
     conn.commit()
+
+    # ── Auto-generate leader report ──
+    updated = get_ticket(incident_no)
+    if updated:
+        candidates = retrieve(updated)
+        candidates = [c for c in candidates if c.get("incident_no") != incident_no]
+        reranked = rerank(updated, candidates)
+        highlights = _build_highlights(updated, reranked)
+        content = _build_report(updated, reranked, highlights)
+        conn.execute(
+            "INSERT INTO leader_reports(id, incident_no, ticket_version, content, highlights) VALUES(?,?,?,?,?)",
+            (str(uuid.uuid4()), incident_no, ver, content, json.dumps(highlights)))
+        tasks = _generate_recommendations(updated, reranked)
+        _save_recommendations(conn, incident_no, ver, tasks)
+        conn.commit()
     conn.close()
     return get_ticket(incident_no)
 
@@ -284,6 +324,50 @@ def get_ticket(incident_no: str) -> dict | None:
     conn = get_db()
     row = conn.execute("SELECT * FROM incident_tickets WHERE incident_no=?",
                        (incident_no,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_ticket_by_id(ticket_id: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM incident_tickets WHERE id=?",
+                       (ticket_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def ingest_tickets_batch(tickets: list[dict]) -> list[str]:
+    ids = []
+    for t in tickets:
+        ids.append(ingest(t))
+    return ids
+
+
+def get_latest_report_standalone(incident_no: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM leader_reports WHERE incident_no=? ORDER BY ticket_version DESC LIMIT 1",
+        (incident_no,)).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {"id": row["id"], "incident_no": row["incident_no"],
+            "ticket_version": row["ticket_version"], "content": row["content"],
+            "highlights": json.loads(row["highlights"]),
+            "generated_at": row["generated_at"]}
+
+
+def revise_task_standalone(task_id: str, **fields) -> dict | None:
+    allowed = {"status", "description", "revision_note", "revised_by"}
+    values = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not values:
+        return None
+    sets = ", ".join(f"{k}=?" for k in values)
+    params = list(values.values()) + [task_id]
+    conn = get_db()
+    conn.execute(f"UPDATE recommended_tasks SET {sets}, updated_at=datetime('now') WHERE id=?", params)
+    conn.commit()
+    row = conn.execute("SELECT * FROM recommended_tasks WHERE id=?", (task_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -345,6 +429,168 @@ def retrieve(current_ticket):
     fts = search_fts(q)
     struct = search_structure(svc, cat, sev, etyp)
     return rrf_fusion([vec, fts, struct])
+
+
+# ── Leader Report Helpers ──
+
+def _build_highlights(ticket, similar):
+    h = [f"[STATUS] {ticket.get('status','open').upper()} — severity {ticket.get('severity','?')}"]
+    if ticket.get("root_cause"):
+        h.append(f"[ROOT CAUSE] {ticket['root_cause'][:150]}")
+    if ticket.get("resolution"):
+        h.append(f"[ACTION] {ticket['resolution'][:150]}")
+    for i, s in enumerate(similar[:2]):
+        if s.get("incident_no") == ticket.get("incident_no"):
+            continue
+        h.append(f"[REFERENCE] Similar: {s.get('incident_no','?')} — {s.get('title','')[:80]}")
+    if ticket.get("status") == "resolved":
+        h.append("[NEXT] Monitor 30min. Schedule post-mortem within 24h.")
+    elif ticket.get("root_cause"):
+        h.append("[NEXT] Apply fix. Validate in staging. Roll out.")
+    else:
+        h.append("[NEXT] Continue investigation. Focus on recent deployments/config changes.")
+    return h[:5]
+
+
+def _build_report(ticket, similar, highlights):
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    lines = [
+        "=" * 60,
+        f"INCIDENT LEADERSHIP REPORT — {ticket.get('incident_no','?')}",
+        "=" * 60,
+        f"Service: {ticket.get('service_name','')} | Severity: {ticket.get('severity','')}",
+        f"Status: {ticket.get('status','open')} | Version: v{ticket.get('version',1)}",
+        f"Updated: {ticket.get('updated_at',now)}",
+        "",
+        "Key Highlights:",
+    ]
+    for i, hl in enumerate(highlights, 1):
+        lines.append(f"  {i}. {hl}")
+    lines.extend([
+        "",
+        f"Description: {ticket.get('description','')[:300]}",
+    ])
+    if ticket.get("root_cause"):
+        lines.append(f"Root Cause: {ticket['root_cause'][:200]}")
+    if ticket.get("resolution"):
+        lines.append(f"Resolution: {ticket['resolution'][:200]}")
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+
+def get_report_history_standalone(incident_no):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM leader_reports WHERE incident_no=? ORDER BY ticket_version ASC",
+        (incident_no,)).fetchall()
+    conn.close()
+    return [{"ticket_version": r["ticket_version"], "highlights": json.loads(r["highlights"]),
+             "generated_at": r["generated_at"]} for r in rows]
+
+
+# ── Engineer Task Recommendations ──
+
+TASK_TEMPLATES = {
+    "timeout": [
+        "Check connection pool metrics for {service_name}",
+        "Review slow query/request logs for {service_name}",
+        "Verify recent deployment diff for changes to {service_name}",
+        "Check downstream service latency (traces) for {service_name}",
+    ],
+    "OOM": [
+        "Capture heap dump / memory profile of {service_name}",
+        "Check if recent deployment increased memory footprint",
+        "Review GC logs for leak patterns in {service_name}",
+    ],
+    "deadlock": [
+        "Capture deadlock logs from database",
+        "Audit transaction lock ordering in {service_name}",
+        "Add retry with exponential backoff for deadlock-prone operations",
+    ],
+    "race_condition": [
+        "Identify shared mutable state in {service_name} handlers",
+        "Audit concurrent write paths to the same data records",
+        "Add pessimistic locking (SELECT FOR UPDATE) or CAS pattern",
+    ],
+    "resource_exhaustion": [
+        "Identify exhausted resource (disk/memory/connections)",
+        "Check system resource limits and current usage",
+        "Review auto-scaling policies for {service_name}",
+    ],
+    "auth_error": [
+        "Check certificate/token expiry dates for {service_name}",
+        "Verify IAM roles and permissions",
+        "Review authentication service health",
+    ],
+    "rate_limit": [
+        "Check current rate-limit configuration for {service_name}",
+        "Identify triggering client/endpoint",
+        "Review traffic pattern changes",
+    ],
+}
+
+DEFAULT_TASKS = [
+    "Assess blast radius: identify all affected services",
+    "Check recent deployments/config changes for {service_name}",
+    "Collect logs, metrics, and traces for {service_name}",
+    "Set up monitoring dashboard for {service_name} key metrics",
+]
+
+
+def _generate_recommendations(ticket, similar):
+    tasks = []
+    order = 1
+    et = ticket.get("error_type", "")
+    svc = ticket.get("service_name", "unknown")
+
+    for tpl in TASK_TEMPLATES.get(et, [])[:3]:
+        tasks.append({"task_order": order, "description": tpl.format(service_name=svc),
+                       "source": f"best-practice/{et}"})
+        order += 1
+    for tpl in DEFAULT_TASKS[:4]:
+        tasks.append({"task_order": order, "description": tpl.format(service_name=svc),
+                       "source": "sre-playbook"})
+        order += 1
+    seen = set()
+    for sim in similar[:2]:
+        ap = sim.get("action_plan", "")
+        for line in ap.split("\n"):
+            line = line.strip()
+            if not line or not line[0].isdigit():
+                continue
+            cl = line.split(". ", 1)[-1] if ". " in line else line[2:].strip()
+            if cl[:50] not in seen and len(tasks) < 8:
+                seen.add(cl[:50])
+                tasks.append({"task_order": order, "description": cl[:200],
+                               "source": sim.get("incident_no", "?")})
+                order += 1
+    if ticket.get("root_cause"):
+        tasks.append({"task_order": order, "description": "Confirm root cause: " + ticket["root_cause"][:150],
+                       "source": "current-investigation"})
+    return tasks
+
+
+def _save_recommendations(conn, incident_no, ver, tasks):
+    conn.execute("DELETE FROM recommended_tasks WHERE incident_no=? AND ticket_version=?",
+                 (incident_no, ver))
+    for t in tasks:
+        conn.execute(
+            "INSERT INTO recommended_tasks(id, incident_no, ticket_version, task_order, description, source) VALUES(?,?,?,?,?,?)",
+            (str(uuid.uuid4()), incident_no, ver, t["task_order"], t["description"], t.get("source")))
+
+
+def get_recommendations_standalone(incident_no, ticket_version=None):
+    conn = get_db()
+    if ticket_version is None:
+        row = conn.execute(
+            "SELECT MAX(ticket_version) FROM recommended_tasks WHERE incident_no=?",
+            (incident_no,)).fetchone()
+        ticket_version = row[0] if row and row[0] else 0
+    rows = conn.execute(
+        "SELECT * FROM recommended_tasks WHERE incident_no=? AND ticket_version=? ORDER BY task_order",
+        (incident_no, ticket_version)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 # =========================================================================
 # Generator (same logic as generator.py)
@@ -463,7 +709,61 @@ SEED_TICKETS = [
      "root_cause": "Race condition: payment webhook and order timeout-cancel job both read order.status='processing', each tried to UPDATE. The job that arrived second won, overwriting with lost update.",
      "resolution": "1. Added SELECT ... FOR UPDATE. 2. Changed to CAS UPDATE pattern: WHERE status='processing'. 3. Added idempotency key. 4. Built reconciliation job.",
      "action_plan": "1. Identify and fix stuck orders. 2. Add pessimistic locking. 3. Use CAS UPDATE pattern. 4. Add idempotency for webhooks. 5. Create reconciliation job.",
-     "severity": "P1", "service_name": "order-service", "category": "application", "status": "resolved", "error_type": "race_condition"},
+      "severity": "P1", "service_name": "order-service", "category": "application", "status": "resolved", "error_type": "race_condition"},
+    {"incident_no": "INC-2024-0021", "title": "Kafka consumer lag 50K — notification delay 20min",
+     "description": "Kafka consumer group 'notif-push' lag reached 50K messages. P99 notification delivery delay 20min (SLO: 30s). Consumer CPU at 15%. No rebalancing. Broker disk IO normal.",
+     "root_cause": "Consumer used synchronous HTTP call to FCM inside each handler. FCM API had intermittent 2s latency on 30% of calls. With 10 threads, throughput dropped from 1000 to 50 msg/s.",
+     "resolution": "1. Moved FCM push to async via asyncio. 2. Increased threads to 50. 3. Added circuit breaker with 500ms timeout. 4. Set max.poll.records=100.",
+     "action_plan": "1. Check consumer lag. 2. Profile handler latency. 3. Move blocking I/O to async pool. 4. Scale consumers. 5. Add lag alerts.",
+     "severity": "P1", "service_name": "notification-service", "category": "application", "status": "resolved", "error_type": "timeout"},
+    {"incident_no": "INC-2024-0022", "title": "Zero-downtime deploy stuck — health check never passes",
+     "description": "Blue-green deployment stuck 45min. Green pods in CrashLoopBackOff: readiness probe failed. App logs show 'FATAL: password authentication failed'. Secret updated but pods not restarted.",
+     "root_cause": "Kubernetes Secrets are not auto-reloaded for mounted volumes. Pods spawned before Secret update cached old credentials. Manual rolling restart resolved it.",
+     "resolution": "1. Deleted green pods to force recreation with fresh Secret. 2. Added Reloader tool for auto-restart on Secret changes. 3. Changed health check to validate DB connection.",
+     "action_plan": "1. Check pod logs. 2. Verify Secret propagation. 3. Force restart pods if Secret changed. 4. Add Reloader. 5. Change health check endpoint.",
+     "severity": "P1", "service_name": "order-service", "category": "application", "status": "resolved", "error_type": "config_error"},
+    {"incident_no": "INC-2024-0023", "title": "VPC peering connection dropped — multi-region replication broken",
+     "description": "Cross-region VPC peering dropped at 03:00 UTC. MySQL replication stopped. Replica lag 4GB. DR site out of sync. VPCFlow logs show 'Action: REJECT' for all cross-VPC traffic.",
+     "root_cause": "Terraform rebuilt VPC peering with different CIDR without create_before_destroy. Old peering deleted before new one established, 6min gap.",
+     "resolution": "1. Accepted pending peering in AWS Console. 2. Updated route tables. 3. Added lifecycle { create_before_destroy = true } in Terraform. 4. Added AWS Config rule for peering changes.",
+     "action_plan": "1. Verify peering status. 2. Check route tables. 3. Accept pending peering. 4. Update Terraform with create_before_destroy. 5. Enable VPC Flow Logs alerting.",
+     "severity": "P0", "service_name": "infra-network", "category": "network", "status": "resolved", "error_type": "config_error"},
+    {"incident_no": "INC-2025-0002", "title": "Search latency degrading — investigating ES query regression",
+     "description": "Search P95 latency increased from 80ms to 450ms over 4h. No deployment. No traffic spike. ES cluster green. Hot threads show time in custom scoring script.",
+     "severity": "P2", "service_name": "search-service", "category": "application", "status": "investigating", "error_type": "timeout"},
+    {"incident_no": "INC-2025-0003", "title": "Third-party payment gateway 503 — failover activated",
+     "description": "Primary payment gateway (Stripe) returning HTTP 503. Failover to Adyen activated. Adyen at 3x volume, P99=800ms. Circuit breaker monitoring Stripe for recovery.",
+     "root_cause": "Stripe incident confirmed via status page. Circuit breaker correctly opened. Adyen not capacity-tested for 100% failover.",
+     "resolution": "1. Confirmed Stripe incident. 2. Scaled Adyen pods 10→30. 3. Added connection pool warming. 4. Monitoring Stripe status for recovery.",
+     "action_plan": "1. Verify upstream provider status. 2. Confirm failover routing. 3. Scale secondary provider. 4. Monitor primary recovery. 5. Capacity-test failover at 100%.",
+     "severity": "P1", "service_name": "payment-service", "category": "application", "status": "mitigated", "error_type": "dependency_failure"},
+    {"incident_no": "INC-2024-0027", "title": "MongoDB replica set election storm — primary flapping 4x/hour",
+     "description": "MongoDB replica set experiencing primary re-elections every 15min. Each election causes 3-8s write unavailability. replSetGetStatus shows correct priority and votes.",
+     "root_cause": "Secondary in different AZ had 0.5% packet loss due to faulty fiber transceiver. Intermittent heartbeat loss triggered elections. AWS health checks didn't detect it (99.5% success).",
+     "resolution": "1. Removed faulty secondary from replica set. 2. AWS replaced transceiver. 3. Re-added node. 4. Increased electionTimeoutMillis to 20000. 5. Added cross-AZ packet loss monitoring.",
+     "action_plan": "1. Check rs.status(). 2. Examine node logs for heartbeat timeouts. 3. Isolate faulty node. 4. Check inter-AZ network health. 5. File ticket with cloud provider.",
+     "severity": "P1", "service_name": "order-service", "category": "database", "status": "resolved", "error_type": "timeout"},
+    {"incident_no": "INC-2024-0030", "title": "Memory leak in image processing worker after watermark rollout",
+     "description": "Image workers OOMKilled after 2-3h. RSS grows at 50MB/min. Heap dump: 1.4M BufferedImage instances in static ConcurrentHashMap. Cache eviction listener never registered.",
+     "root_cause": "LinkedHashMap's removeEldestEntry not called because Collections.synchronizedMap doesn't delegate to it. Cache grew unbounded, holding every processed image.",
+     "resolution": "1. Replaced with Guava Cache (maxSize=100, expireAfterAccess=5min). 2. Added direct memory buffer pool (MaxDirectMemorySize=512m). 3. Deployed with -XX:+ExitOnOutOfMemoryError.",
+     "action_plan": "1. Capture heap dump. 2. Identify object accumulation in caches. 3. Verify cache eviction logic works. 4. Use Guava Cache or Caffeine. 5. Set memory limits with graceful degradation.",
+     "severity": "P1", "service_name": "image-service", "category": "application", "status": "resolved", "error_type": "OOM"},
+    {"incident_no": "INC-2025-0005", "title": "API rate limiter misconfiguration — legitimate traffic blocked",
+     "description": "Mobile app returning '429 Too Many Requests' during normal usage. Rate config changed 2h ago via feature flag: limit=10/sec. Previously 100/min. 90% of traffic blocked.",
+     "severity": "P0", "service_name": "api-gateway", "category": "application", "status": "investigating", "error_type": "config_error"},
+    {"incident_no": "INC-2024-0025", "title": "Suspicious spike in failed login attempts — potential brute force",
+     "description": "Auth service logging 50K failed logins/min from 340 IPs across 12 countries. 3 accounts compromised. Rate limiter (5/min per IP) not triggering due to distributed attacks.",
+     "root_cause": "IP-based rate limiting bypassed by distributed botnet. No account-level rate limiting. Compromised accounts lacked 2FA (legacy grandfathered).",
+     "resolution": "1. Force-reset compromised accounts. 2. Implemented account-level rate limiting (10/5min). 3. Blocked IPs via WAF. 4. Forced 2FA enrollment. 5. Added geo-anomaly detection.",
+     "action_plan": "1. Block attacking IPs. 2. Force-reset compromised accounts. 3. Add account-level rate limiting. 4. Audit 2FA coverage. 5. Set up geo-anomaly alerts.",
+     "severity": "P0", "service_name": "auth-service", "category": "security", "status": "resolved", "error_type": "auth_error"},
+    {"incident_no": "INC-2025-0006", "title": "Critical: user data export job leaking PII to logs",
+     "description": "GDPR export job logging full user records (email, phone, address) at INFO level to ELK accessible to all. 47K users over 72h. Job currently stopped.",
+     "root_cause": "@ToString annotation on UserRecord logged all fields. Developer changed log level from DEBUG to INFO 3 days ago and never reverted. No PII redaction filter.",
+     "resolution": "1. Stopped job, rotated logs. 2. Added @ToString.Exclude on PII fields. 3. Implemented logback redaction filter. 4. Restricted ELK PII indices to security team. 5. Added Checkstyle rule.",
+     "action_plan": "1. Stop affected job. 2. Identify and secure PII logs. 3. Audit @ToString usage. 4. Add log redaction filter. 5. Restrict log access. 6. Add PII leak detection in CI.",
+     "severity": "P0", "service_name": "data-export-service", "category": "security", "status": "resolved", "error_type": "config_error"},
 ]
 
 # =========================================================================
@@ -558,6 +858,20 @@ def main():
         reranked = rerank(ticket, candidates)
         print_rerank(reranked, stage["stage"])
 
+        # ── Show report demo highlights ──
+        highlights = _build_highlights(ticket, reranked)
+        print(f"\n  >>> REPORT DEMO (v{ ticket['version']}) <<<")
+        for hl in highlights:
+            print(f"      * {hl}")
+
+        # ── Show recommended tasks ──
+        rec_tasks = _generate_recommendations(ticket, reranked)
+        if rec_tasks:
+            print(f"\n  >>> RECOMMENDED TASKS ({len(rec_tasks)} items) <<<")
+            for t in rec_tasks:
+                print(f"      [ ] T{t['task_order']:02d}  {t['description'][:90]}")
+                print(f"           src: {t.get('source','?')}")
+
         ts = [r.get("rerank_score", 0) for r in reranked[:5]]
         avg = sum(ts) / max(len(ts), 1) if ts else 0
         history.append({"stage": stage["stage"], "version": ticket["version"],
@@ -576,6 +890,30 @@ def main():
     print("\n  Key insight: As description enriches and root_cause is identified,")
     print("  the embedding narrows to better match semantically similar tickets,")
     print("  progressively improving rerank scores across the incident lifecycle.")
+
+    # ── Report History ──
+    section("Report Demo History — How Reports Evolve")
+    reports = get_report_history_standalone("INC-2025-0001")
+    for r in reports:
+        print(f"\n  [v{r['ticket_version']}] {r.get('generated_at','')[:16]}")
+        for hl in r.get("highlights", []):
+            print(f"    * {hl}")
+    print("\n  Key insight: Every ticket update auto-generates a leadership")
+    print("  report capturing state, impact, and 3-5 key highlights.")
+
+    # ── Task History ──
+    section("Recommended Tasks History — Human-Revisable Engineer Tasks")
+    for ver in sorted(set(r["ticket_version"] for r in reports)):
+        tasks = get_recommendations_standalone("INC-2025-0001", ticket_version=ver)
+        if tasks:
+            print(f"\n  [v{ver}] {len(tasks)} tasks:")
+            for t in tasks:
+                icon = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]", "rejected": "[R]"}.get(t["status"], "[ ]")
+                print(f"    {icon} T{t['task_order']:02d} {t['description'][:100]}")
+                print(f"         src: {t.get('source','?')}")
+    print("\n  Key insight: Recommendations evolve with each ticket update.")
+    print("  Engineers can revise tasks via the revise_task() API — mark")
+    print("  as in_progress, completed, or rejected with revision notes.")
 
     section("PoC Complete — All checks passed")
 

@@ -15,6 +15,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | UUID | 主键 |
+| incident_no | VARCHAR(32) UNIQUE | 人类可读的 ticket 编号 |
 | title | TEXT | 标题 |
 | description | TEXT | 问题描述 |
 | root_cause | TEXT (nullable) | 根因（已解决时填写） |
@@ -23,12 +24,13 @@
 | severity | VARCHAR(16) | P0 / P1 / P2 / P3 |
 | service_name | VARCHAR(128) | 受影响服务 |
 | category | VARCHAR(64) | 分类 |
-| status | VARCHAR(16) | open / resolved |
+| status | VARCHAR(16) | open / investigating / mitigated / resolved |
 | error_type | VARCHAR(64) | timeout / OOM / panic / deadlock / ... |
 | keywords | TEXT[] | 提取关键词 |
-| embedding_description | VECTOR(1536) | 问题描述向量 |
-| embedding_root_cause | VECTOR(1536) | 根因+方案向量（已解决才有） |
-| created_at / resolved_at | TIMESTAMPTZ | 时间 |
+| embedding_description | VECTOR(384) | 问题描述向量（PoC 用本地 384 维） |
+| embedding_root_cause | VECTOR(384) | 根因+方案向量（已解决才有） |
+| created_at / updated_at / resolved_at | TIMESTAMPTZ | 时间 |
+| version | INT | 更新计数器 |
 
 ### 索引
 
@@ -158,3 +160,75 @@ Stage 3 (T+90min): 解决 + resolution 入库 → status=resolved, 完整闭环
 每个阶段输出 Top-5 召回结果 + 最终汇总表展示 score 随阶段递增的趋势。
 
 运行方式：`python demo_lifecycle.py`
+
+---
+
+## 9. Leadership Report — 动态生成 Leader 汇报
+
+每次 incident ticket 更新时，自动生成面向 Leader 的结构化汇报报告。
+报告包含 3-5 条重点标注（highlights）。
+
+### 9.1 报告模板
+
+```
+INCIDENT LEADERSHIP REPORT
+  1. Executive Summary    — 当前状态 + 最相似历史 ticket 匹配
+  2. Current Status       — status / severity / error_type / service
+  3. Impact Assessment    — 按 severity 等级描述影响面
+  4. Investigation Progress — root_cause 是否已定位 / resolution 是否已实施
+  5. Key Highlights (3-5) — 动态标注
+  6. Recommended Next Steps — 按 status 推荐下一步动作
+```
+
+### 9.2 Highlights 生成规则
+
+| 优先级 | 条件 | 内容 |
+|--------|------|------|
+| HL1 | 始终 | `[STATUS]` 当前状态 + 严重级别 |
+| HL2 | root_cause 已填写 | `[ROOT CAUSE]` 根因摘要 |
+| HL3 | resolution 已填写 | `[ACTION]` 已执行操作 |
+| HL4-5 | 存在相似 ticket | `[REFERENCE]` 历史类似 case |
+| HL 末 | 始终 | `[NEXT]` 下一步建议 |
+
+### 9.3 数据库
+
+新增 `leader_reports` 表，关联到每个 ticket version，存储完整报告文本 + highlights 数组。
+
+### 9.4 集成方式
+
+每次 `update_ticket_status()` 调用结束后自动生成并持久化一份报告。
+可通过 `get_latest_report(incident_no)` / `get_report_history(incident_no)` 查询。
+
+---
+
+## 10. Engineer Task Recommendations — 可人工修订的任务推荐
+
+每次 ticket 更新时，自动为处理工程师生成推荐任务列表。工程师可以标记完成/拒绝/添加备注。
+
+### 10.1 任务生成规则
+
+| 来源 | 示例 | 优先级 |
+|------|------|--------|
+| error_type 模板 | "Check connection pool metrics for {service}" | 最高 (3条) |
+| SRE playbook 通用 | "Assess blast radius / Check recent deployments" | 中 (4条) |
+| 相似历史 ticket action_plan | 提取历史 solution 中的操作步骤 | 低 |
+| 当前根因确认 | "Confirm root cause hypothesis: ..." | 有 root_cause 时追加 |
+
+### 10.2 数据库
+
+新增 `recommended_tasks` 表，字段含：task_order, description, source, status (pending/in_progress/completed/rejected), revised_by, revision_note。
+
+### 10.3 人工修订 API
+
+```python
+from db import revise_task
+revise_task(task_id, status="completed", revised_by="david.lin", revision_note="Verified pool metrics — back to normal")
+```
+
+### 10.4 数据表
+
+| 表 | 用途 |
+|------|------|
+| `incident_tickets` | 核心 ticket 数据 + 向量 |
+| `leader_reports` | 汇报报告（每版本一份） |
+| `recommended_tasks` | 推荐任务（可人工修订） |
