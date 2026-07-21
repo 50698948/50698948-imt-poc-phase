@@ -27,8 +27,8 @@
 | status | VARCHAR(16) | open / investigating / mitigated / resolved |
 | error_type | VARCHAR(64) | timeout / OOM / panic / deadlock / ... |
 | keywords | TEXT[] | 提取关键词 |
-| embedding_description | VECTOR(384) | 问题描述向量（PoC 用本地 384 维） |
-| embedding_root_cause | VECTOR(384) | 根因+方案向量（已解决才有） |
+| embedding_description | VECTOR(384) | 问题描述向量（离线 384d，LLM 模式可用 1536d） |
+| embedding_root_cause | VECTOR(384) | 根因+方案向量（同上） |
 | created_at / updated_at / resolved_at | TIMESTAMPTZ | 时间 |
 | version | INT | 更新计数器 |
 

@@ -7,7 +7,7 @@ Usage:
     3. python main.py                # run E2E with a sample current ticket
 
 Environment:
-    OPENAI_API_KEY must be set in .env (copy .env.example).
+    LLM_MODE=offline (default, no API needed). Set LLM_API_KEY in .env for LLM mode.
 """
 
 import json

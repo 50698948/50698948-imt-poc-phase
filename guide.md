@@ -42,11 +42,34 @@ pip install --user -r requirements.txt
 ### 1.3 配置环境变量
 
 ```powershell
-# 复制模板
 copy .env.example .env
+```
 
-# 编辑 .env（如果用 OpenAI embedding 才需要填写 API Key）
-# 当前 PoC 使用本地随机投影，不需要 API Key
+**LLM_MODE 说明**（默认 `offline`，无需 API Key）：
+
+| 模式 | 值 | Embedding | Reranker | Generator | 需要 |
+|------|-----|-----------|----------|-----------|------|
+| 离线 | `offline` | 随机投影 (384d) | 余弦相似度 | 模板生成 | 无 |
+| OpenAI | `openai` | text-embedding-3-small | GPT-4o listwise | GPT-4o 分析 | LLM_API_KEY |
+| 自定义 | `custom` | 自定义模型 | 自定义模型 | 自定义模型 | LLM_API_KEY + LLM_BASE_URL |
+
+**切换到 LLM 模式**：编辑 `.env`，取消注释并填写：
+
+```bash
+LLM_MODE=openai
+LLM_API_KEY=sk-your-key-here
+```
+
+**自定义端点示例**（Azure / Ollama / 本地代理）：
+
+```bash
+# Ollama
+LLM_MODE=custom
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=llama3
+LLM_EMBEDDING_MODEL=nomic-embed-text
+LLM_EMBEDDING_DIM=768
 ```
 
 ---
