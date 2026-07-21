@@ -510,9 +510,22 @@ Start-Sleep -Seconds 5
 docker ps --filter "name=imt-poc-db"
 # 期望: Up XX seconds (healthy)
 
-# 4. 灌入模拟数据
+# 4. 灌入模拟数据（35 条：20 resolved + 15 含 investigating/mitigated/open）
 python seed_data.py
-# 期望: Seeded 20 tickets. Done.
+# 期望: Seeded 35 tickets. Done.
+```
+
+**数据概览**（seed 后可验证）：
+
+| 统计 | 数量 |
+|------|------|
+| 总 ticket | 35 |
+| resolved | 28 |
+| investigating | 4 |
+| mitigated | 1 |
+| open | 1 |
+| 类别: database / application / network / infrastructure / security | 8 / 12 / 6 / 6 / 3 |
+| error_type 种类 | 9（timeout, OOM, deadlock, race_condition, config_error, dependency_failure, resource_exhaustion, auth_error, rate_limit） |
 ```
 
 ---
@@ -529,12 +542,13 @@ python main.py
 
 2. **Step 2 — 三路召回 + RRF 融合**：
    ```
-   [1] INC-2024-0001 | MySQL master CPU 100% after traffic spike
-   [2] INC-2024-0002 | PostgreSQL connection pool exhausted during black-friday
-   [3] INC-2024-0006 | Intermittent 502 errors between API gateway and upstream
+   [1] INC-2024-0028 | Cassandra nodetool repair backlog causing read-repair timeout
+   [2] INC-2024-0027 | MongoDB replica set election storm — primary flapping 4x/hour
+   [3] INC-2024-0001 | MySQL master CPU 100% after traffic spike
+   [4] INC-2024-0002 | PostgreSQL connection pool exhausted during black-friday
    ...
    ```
-   三个检索路径（向量语义 + 全文关键词 + 结构化精确匹配）各自召回 Top-50/30，再通过 RRF 算法融合排序。注意 INC-2024-0001 排在第一位——因为它是同一个 `order-service`，结构化路径提升了它的权重。
+   三个检索路径（向量语义 + 全文关键词 + 结构化精确匹配）各自召回，RRF 融合排序。注意新加入的 INC-2024-0027/0028 排在前面——因为它们同属 `order-service` + `database`，结构化路径和全文检索都精准命中。**数据集从 20 条扩展到 35 条后，召回质量不降反升。**
 
 3. **Step 3 — 精排**：
    ```
