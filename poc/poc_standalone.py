@@ -327,6 +327,50 @@ def get_ticket(incident_no: str) -> dict | None:
     conn.close()
     return dict(row) if row else None
 
+
+def get_ticket_by_id(ticket_id: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM incident_tickets WHERE id=?",
+                       (ticket_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def ingest_tickets_batch(tickets: list[dict]) -> list[str]:
+    ids = []
+    for t in tickets:
+        ids.append(ingest(t))
+    return ids
+
+
+def get_latest_report_standalone(incident_no: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM leader_reports WHERE incident_no=? ORDER BY ticket_version DESC LIMIT 1",
+        (incident_no,)).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {"id": row["id"], "incident_no": row["incident_no"],
+            "ticket_version": row["ticket_version"], "content": row["content"],
+            "highlights": json.loads(row["highlights"]),
+            "generated_at": row["generated_at"]}
+
+
+def revise_task_standalone(task_id: str, **fields) -> dict | None:
+    allowed = {"status", "description", "revision_note", "revised_by"}
+    values = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not values:
+        return None
+    sets = ", ".join(f"{k}=?" for k in values)
+    params = list(values.values()) + [task_id]
+    conn = get_db()
+    conn.execute(f"UPDATE recommended_tasks SET {sets}, updated_at=datetime('now') WHERE id=?", params)
+    conn.commit()
+    row = conn.execute("SELECT * FROM recommended_tasks WHERE id=?", (task_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 # =========================================================================
 # RRF Fusion
 # =========================================================================

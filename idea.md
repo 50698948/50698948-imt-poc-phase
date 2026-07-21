@@ -15,6 +15,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | UUID | 主键 |
+| incident_no | VARCHAR(32) UNIQUE | 人类可读的 ticket 编号 |
 | title | TEXT | 标题 |
 | description | TEXT | 问题描述 |
 | root_cause | TEXT (nullable) | 根因（已解决时填写） |
@@ -23,12 +24,13 @@
 | severity | VARCHAR(16) | P0 / P1 / P2 / P3 |
 | service_name | VARCHAR(128) | 受影响服务 |
 | category | VARCHAR(64) | 分类 |
-| status | VARCHAR(16) | open / resolved |
+| status | VARCHAR(16) | open / investigating / mitigated / resolved |
 | error_type | VARCHAR(64) | timeout / OOM / panic / deadlock / ... |
 | keywords | TEXT[] | 提取关键词 |
-| embedding_description | VECTOR(1536) | 问题描述向量 |
-| embedding_root_cause | VECTOR(1536) | 根因+方案向量（已解决才有） |
-| created_at / resolved_at | TIMESTAMPTZ | 时间 |
+| embedding_description | VECTOR(384) | 问题描述向量（PoC 用本地 384 维） |
+| embedding_root_cause | VECTOR(384) | 根因+方案向量（已解决才有） |
+| created_at / updated_at / resolved_at | TIMESTAMPTZ | 时间 |
+| version | INT | 更新计数器 |
 
 ### 索引
 
