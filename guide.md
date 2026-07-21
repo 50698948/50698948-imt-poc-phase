@@ -829,3 +829,68 @@ RRF_K = 60          # RRF 融合常数 k
 MERGE_TOPK = 30     # RRF 融合后返回数
 FINAL_TOPK = 5      # 精排后最终返回数
 ```
+
+---
+
+## 附录 A：代码与文档对齐确认
+
+> 以下交叉审查于 2026-07-21 完成，确认所有代码与文档完全对齐。
+
+### A.1 文件清单
+
+| 文件 | 用途 | 文档引用位置 |
+|------|------|------------|
+| `config.py` | 全局配置 | guide.md §12 |
+| `db.py` | 数据库操作 + 检索 + 更新 + Report + Tasks | guide.md §9 |
+| `demo_lifecycle.py` | 生命周期 demo | guide.md §5, §11.3 |
+| `embedding.py` | 本地向量生成 | idea.md §6 |
+| `generator.py` | 行动计划模板生成 | idea.md §6 |
+| `leader_report.py` | Leader Report 模板引擎 | idea.md §9 |
+| `main.py` | E2E 检索入口 | guide.md §4, §11.2 |
+| `models.py` | ORM 模型 (3 tables) | — |
+| `poc_standalone.py` | 零依赖独立版 | guide.md §8 |
+| `recommend.py` | 任务推荐引擎 | idea.md §10 |
+| `reranker.py` | 余弦精排 | idea.md §6 |
+| `retrieval.py` | RRF 融合 | idea.md §6 |
+| `seed_data.py` | 35 条模拟数据 | guide.md §3 |
+
+### A.2 数据库表对齐
+
+| 表 | init.sql | models.py | idea.md | guide.md |
+|----|---------|-----------|---------|---------|
+| `incident_tickets` (20 列) | ✓ | ✓ | ✓ | — |
+| `leader_reports` (6 列) | ✓ | ✓ | ✓ | ✓ |
+| `recommended_tasks` (11 列) | ✓ | ✓ | ✓ | ✓ |
+
+### A.3 API 函数对齐
+
+`guide.md` §9 列出的 12 个 API 函数全部存在于 `db.py`，签名一致：
+
+| 函数 | db.py | poc_standalone.py |
+|------|-------|-------------------|
+| `ingest_ticket` | L20 | `ingest()` |
+| `ingest_tickets_batch` | L67 | `ingest_tickets_batch()` |
+| `get_ticket_by_incident_no` | L263 | `get_ticket()` |
+| `get_ticket_by_id` | L255 | `get_ticket_by_id()` |
+| `update_ticket_description` | L299 | `update_ticket(description=...)` |
+| `update_ticket_root_cause` | L321 | `update_ticket(root_cause=...)` |
+| `update_ticket_resolution` | L347 | `update_ticket(resolution=...)` |
+| `update_ticket_status` | L373 | `update_ticket(status=...)` |
+| `get_latest_report` | L476 | `get_latest_report_standalone()` |
+| `get_report_history` | L495 | `get_report_history_standalone()` |
+| `get_recommendations` | L547 | `get_recommendations_standalone()` |
+| `revise_task` | L584 | `revise_task_standalone()` |
+
+### A.4 已验证的级联联动
+
+```
+update_ticket_status() 单次调用触发:
+  ├─ version +1
+  ├─ updated_at = now()
+  ├─ description 变化 → re-embed description (384-dim)
+  ├─ root_cause/resolution 变化 → re-embed root_cause (384-dim)
+  ├─ 自动生成 Leader Report → 存入 leader_reports
+  └─ 自动生成 Recommend Tasks → 存入 recommended_tasks
+```
+
+已通过完整 E2E 测试 (`seed → main.py → demo_lifecycle.py → poc_standalone.py`)。
