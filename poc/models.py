@@ -5,9 +5,11 @@ from typing import Optional
 from sqlalchemy import (
     UUID, String, Text, DateTime, text as sa_text,
     ARRAY, create_engine, func, Index, Integer,
+    ForeignKey,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 from pgvector.sqlalchemy import Vector
+import json as _json
 
 from config import DATABASE_URL, EMBEDDING_DIM
 
@@ -53,6 +55,25 @@ class IncidentTicket(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class LeaderReport(Base):
+    __tablename__ = "leader_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID, primary_key=True, server_default=sa_text("gen_random_uuid()")
+    )
+    incident_no: Mapped[str] = mapped_column(
+        String(32), ForeignKey("incident_tickets.incident_no"), nullable=False,
+    )
+    ticket_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    highlights: Mapped[list] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=sa_text("'{}'::text[]"),
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=sa_text("now()")
     )
 
 

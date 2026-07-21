@@ -158,3 +158,41 @@ Stage 3 (T+90min): 解决 + resolution 入库 → status=resolved, 完整闭环
 每个阶段输出 Top-5 召回结果 + 最终汇总表展示 score 随阶段递增的趋势。
 
 运行方式：`python demo_lifecycle.py`
+
+---
+
+## 9. Leadership Report — 动态生成 Leader 汇报
+
+每次 incident ticket 更新时，自动生成面向 Leader 的结构化汇报报告。
+报告包含 3-5 条重点标注（highlights）。
+
+### 9.1 报告模板
+
+```
+INCIDENT LEADERSHIP REPORT
+  1. Executive Summary    — 当前状态 + 最相似历史 ticket 匹配
+  2. Current Status       — status / severity / error_type / service
+  3. Impact Assessment    — 按 severity 等级描述影响面
+  4. Investigation Progress — root_cause 是否已定位 / resolution 是否已实施
+  5. Key Highlights (3-5) — 动态标注
+  6. Recommended Next Steps — 按 status 推荐下一步动作
+```
+
+### 9.2 Highlights 生成规则
+
+| 优先级 | 条件 | 内容 |
+|--------|------|------|
+| HL1 | 始终 | `[STATUS]` 当前状态 + 严重级别 |
+| HL2 | root_cause 已填写 | `[ROOT CAUSE]` 根因摘要 |
+| HL3 | resolution 已填写 | `[ACTION]` 已执行操作 |
+| HL4-5 | 存在相似 ticket | `[REFERENCE]` 历史类似 case |
+| HL 末 | 始终 | `[NEXT]` 下一步建议 |
+
+### 9.3 数据库
+
+新增 `leader_reports` 表，关联到每个 ticket version，存储完整报告文本 + highlights 数组。
+
+### 9.4 集成方式
+
+每次 `update_ticket_status()` 调用结束后自动生成并持久化一份报告。
+可通过 `get_latest_report(incident_no)` / `get_report_history(incident_no)` 查询。

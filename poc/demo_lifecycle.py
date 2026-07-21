@@ -19,6 +19,8 @@ from db import (
     ingest_ticket,
     update_ticket_status,
     get_ticket_by_incident_no,
+    get_latest_report,
+    get_report_history,
 )
 from retrieval import retrieve
 from reranker import rerank
@@ -193,6 +195,13 @@ def main():
 
         print_rerank_table(reranked, stage["stage"])
 
+        # ── Show generated leader report ──
+        latest_report = get_latest_report(stage["incident_no"])
+        if latest_report:
+            print(f"\n  >>> LEADER REPORT (v{latest_report['ticket_version']}) <<<")
+            for hl in latest_report.get("highlights", []):
+                print(f"      * {hl}")
+
         # ── Record for history ──
         top5_nos = [r.get("incident_no", "?") for r in reranked[:5]]
         top5_scores = [round(r.get("rerank_score", 0), 1) for r in reranked[:5]]
@@ -242,6 +251,20 @@ def main():
     print("=" * 80)
     print("Lifecycle Demo Complete.")
     print("=" * 80)
+
+    # ── Report history summary ──
+    print("\n")
+    print("=" * 80)
+    print("LEADER REPORT HISTORY — How Reports Evolve Across Updates")
+    print("=" * 80)
+    reports = get_report_history("INC-2025-0001")
+    for i, r in enumerate(reports, 1):
+        print(f"\n  [v{r['ticket_version']}] {r.get('generated_at','')[:16]}")
+        for hl in r.get("highlights", []):
+            print(f"    * {hl}")
+    print("\n  Key insight: Every ticket update auto-generates a leadership")
+    print("  report capturing the current state, impact, and key highlights.")
+    print("  Reports evolve as the incident matures from 'triage' → 'root cause' → 'resolved'.")
 
 
 if __name__ == "__main__":

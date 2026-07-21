@@ -104,6 +104,16 @@ CREATE INDEX IF NOT EXISTS idx_service ON incident_tickets(service_name);
 CREATE INDEX IF NOT EXISTS idx_category ON incident_tickets(category);
 CREATE INDEX IF NOT EXISTS idx_status ON incident_tickets(status);
 CREATE INDEX IF NOT EXISTS idx_error_type ON incident_tickets(error_type);
+
+CREATE TABLE IF NOT EXISTS leader_reports (
+    id TEXT PRIMARY KEY,
+    incident_no TEXT NOT NULL,
+    ticket_version INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    highlights TEXT DEFAULT '[]',
+    generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reports_inc ON leader_reports(incident_no, ticket_version);
 """
 
 
@@ -276,6 +286,19 @@ def update_ticket(incident_no: str, **fields) -> dict | None:
     """, (ticket.get("title", ""), ticket.get("description", ""),
           ticket.get("root_cause", ""), ticket.get("resolution", ""), incident_no))
     conn.commit()
+
+    # ── Auto-generate leader report ──
+    updated = get_ticket(incident_no)
+    if updated:
+        candidates = retrieve(updated)
+        candidates = [c for c in candidates if c.get("incident_no") != incident_no]
+        reranked = rerank(updated, candidates)
+        highlights = _build_highlights(updated, reranked)
+        content = _build_report(updated, reranked, highlights)
+        conn.execute(
+            "INSERT INTO leader_reports(id, incident_no, ticket_version, content, highlights) VALUES(?,?,?,?,?)",
+            (str(uuid.uuid4()), incident_no, ver, content, json.dumps(highlights)))
+        conn.commit()
     conn.close()
     return get_ticket(incident_no)
 
@@ -345,6 +368,63 @@ def retrieve(current_ticket):
     fts = search_fts(q)
     struct = search_structure(svc, cat, sev, etyp)
     return rrf_fusion([vec, fts, struct])
+
+
+# ── Leader Report Helpers ──
+
+def _build_highlights(ticket, similar):
+    h = [f"[STATUS] {ticket.get('status','open').upper()} — severity {ticket.get('severity','?')}"]
+    if ticket.get("root_cause"):
+        h.append(f"[ROOT CAUSE] {ticket['root_cause'][:150]}")
+    if ticket.get("resolution"):
+        h.append(f"[ACTION] {ticket['resolution'][:150]}")
+    for i, s in enumerate(similar[:2]):
+        if s.get("incident_no") == ticket.get("incident_no"):
+            continue
+        h.append(f"[REFERENCE] Similar: {s.get('incident_no','?')} — {s.get('title','')[:80]}")
+    if ticket.get("status") == "resolved":
+        h.append("[NEXT] Monitor 30min. Schedule post-mortem within 24h.")
+    elif ticket.get("root_cause"):
+        h.append("[NEXT] Apply fix. Validate in staging. Roll out.")
+    else:
+        h.append("[NEXT] Continue investigation. Focus on recent deployments/config changes.")
+    return h[:5]
+
+
+def _build_report(ticket, similar, highlights):
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    lines = [
+        "=" * 60,
+        f"INCIDENT LEADERSHIP REPORT — {ticket.get('incident_no','?')}",
+        "=" * 60,
+        f"Service: {ticket.get('service_name','')} | Severity: {ticket.get('severity','')}",
+        f"Status: {ticket.get('status','open')} | Version: v{ticket.get('version',1)}",
+        f"Updated: {ticket.get('updated_at',now)}",
+        "",
+        "Key Highlights:",
+    ]
+    for i, hl in enumerate(highlights, 1):
+        lines.append(f"  {i}. {hl}")
+    lines.extend([
+        "",
+        f"Description: {ticket.get('description','')[:300]}",
+    ])
+    if ticket.get("root_cause"):
+        lines.append(f"Root Cause: {ticket['root_cause'][:200]}")
+    if ticket.get("resolution"):
+        lines.append(f"Resolution: {ticket['resolution'][:200]}")
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+
+def get_report_history_standalone(incident_no):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM leader_reports WHERE incident_no=? ORDER BY ticket_version ASC",
+        (incident_no,)).fetchall()
+    conn.close()
+    return [{"ticket_version": r["ticket_version"], "highlights": json.loads(r["highlights"]),
+             "generated_at": r["generated_at"]} for r in rows]
 
 # =========================================================================
 # Generator (same logic as generator.py)
@@ -558,6 +638,12 @@ def main():
         reranked = rerank(ticket, candidates)
         print_rerank(reranked, stage["stage"])
 
+        # ── Show leader report highlights ──
+        highlights = _build_highlights(ticket, reranked)
+        print(f"\n  >>> LEADER REPORT HIGHLIGHTS (v{ ticket['version']}) <<<")
+        for hl in highlights:
+            print(f"      * {hl}")
+
         ts = [r.get("rerank_score", 0) for r in reranked[:5]]
         avg = sum(ts) / max(len(ts), 1) if ts else 0
         history.append({"stage": stage["stage"], "version": ticket["version"],
@@ -576,6 +662,17 @@ def main():
     print("\n  Key insight: As description enriches and root_cause is identified,")
     print("  the embedding narrows to better match semantically similar tickets,")
     print("  progressively improving rerank scores across the incident lifecycle.")
+
+    # ── Report History ──
+    section("Leader Report History — How Reports Evolve")
+    reports = get_report_history_standalone("INC-2025-0001")
+    for r in reports:
+        print(f"\n  [v{r['ticket_version']}] {r.get('generated_at','')[:16]}")
+        for hl in r.get("highlights", []):
+            print(f"    * {hl}")
+    print("\n  Key insight: Every ticket update auto-generates a leadership")
+    print("  report capturing state, impact, and 3-5 key highlights.")
+    print("  Reports evolve as the incident matures (triage → root cause → resolved).")
 
     section("PoC Complete — All checks passed")
 

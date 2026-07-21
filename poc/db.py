@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from config import VECTOR_TOPK, FTS_TOPK, STRUCT_TOPK
 from embedding import embed
-from models import IncidentTicket, get_session
+from models import IncidentTicket, LeaderReport, get_session
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +426,20 @@ def update_ticket_status(
             .values(**values)
         )
         s.execute(stmt)
-    return get_ticket_by_incident_no(incident_no)
+
+    # ── Auto-generate leader report after every status update ──
+    updated = get_ticket_by_incident_no(incident_no)
+    if updated:
+        from leader_report import generate_leader_report, extract_highlights
+        from retrieval import retrieve as _retrieve
+        from reranker import rerank as _rerank
+        _candidates = _retrieve(updated)
+        _reranked = _rerank(updated, _candidates)
+        _content = generate_leader_report(updated, _reranked)
+        _hl = extract_highlights(updated, _reranked)
+        save_leader_report(incident_no, updated["version"], _content, _hl)
+
+    return updated
 
 
 def _get_ticket_title(session, incident_no: str) -> str:
@@ -435,3 +448,58 @@ def _get_ticket_title(session, incident_no: str) -> str:
         select(IncidentTicket.title).where(IncidentTicket.incident_no == incident_no)
     ).scalar()
     return row or ""
+
+
+# ---------------------------------------------------------------------------
+# Leader Reports
+# ---------------------------------------------------------------------------
+
+def save_leader_report(incident_no: str, ticket_version: int,
+                       content: str, highlights: list[str]) -> uuid.UUID:
+    """Persist a leader report for the given ticket version."""
+    report = LeaderReport(
+        incident_no=incident_no,
+        ticket_version=ticket_version,
+        content=content,
+        highlights=highlights,
+    )
+    with get_session() as s, s.begin():
+        s.add(report)
+        s.flush()
+        return report.id
+
+
+def get_latest_report(incident_no: str) -> dict | None:
+    """Return the most recent leader report for a ticket."""
+    from sqlalchemy import select
+    with get_session() as s:
+        stmt = (
+            select(LeaderReport)
+            .where(LeaderReport.incident_no == incident_no)
+            .order_by(LeaderReport.ticket_version.desc())
+            .limit(1)
+        )
+        r = s.execute(stmt).scalar_one_or_none()
+        if r is None:
+            return None
+        return {"id": str(r.id), "incident_no": r.incident_no,
+                "ticket_version": r.ticket_version, "content": r.content,
+                "highlights": r.highlights,
+                "generated_at": r.generated_at.isoformat() if r.generated_at else None}
+
+
+def get_report_history(incident_no: str) -> list[dict]:
+    """Return all leader reports for a ticket, oldest first."""
+    from sqlalchemy import select
+    with get_session() as s:
+        stmt = (
+            select(LeaderReport)
+            .where(LeaderReport.incident_no == incident_no)
+            .order_by(LeaderReport.ticket_version.asc())
+        )
+        rows = s.execute(stmt).scalars().all()
+        return [{"id": str(r.id), "incident_no": r.incident_no,
+                 "ticket_version": r.ticket_version, "content": r.content,
+                 "highlights": r.highlights,
+                 "generated_at": r.generated_at.isoformat() if r.generated_at else None}
+                for r in rows]
