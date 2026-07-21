@@ -4,7 +4,12 @@ import { useState } from "react";
 
 const API = "http://localhost:8000";
 
-const STAGE_COLORS = ["from-indigo-600 to-blue-600", "from-cyan-600 to-teal-600", "from-yellow-600 to-orange-600", "from-emerald-600 to-green-600"];
+const STAGE_GRADIENTS = [
+  { from: "from-indigo-600", to: "to-blue-600", dot: "bg-indigo-500", glow: "shadow-indigo-500/50" },
+  { from: "from-cyan-600", to: "to-teal-600", dot: "bg-cyan-500", glow: "shadow-cyan-500/50" },
+  { from: "from-amber-600", to: "to-orange-600", dot: "bg-amber-500", glow: "shadow-amber-500/50" },
+  { from: "from-emerald-600", to: "to-green-600", dot: "bg-emerald-500", glow: "shadow-emerald-500/50" },
+];
 
 export default function LifecyclePage() {
   const [data, setData] = useState<any>(null);
@@ -22,20 +27,20 @@ export default function LifecyclePage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Lifecycle Demo</h1>
           <p className="text-gray-500 text-xs mt-1">Simulate incident evolution — embedding quality improves with richer data</p>
         </div>
         <button onClick={run} disabled={loading}
-          className="flex items-center gap-2 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-bold transition-all duration-200 shadow-lg shadow-cyan-900/30">
+          className="flex items-center gap-2 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-bold transition-all shadow-lg shadow-cyan-900/30">
           <span>{loading ? "◷" : "▶"}</span> {loading ? "Running 4 Stages..." : "Run Lifecycle Demo"}
         </button>
       </div>
 
       {!data && !loading && (
-        <div className="text-center py-20">
-          <div className="text-5xl mb-4">◷</div>
+        <div className="text-center py-24">
+          <div className="text-6xl mb-4">◷</div>
           <p className="text-gray-500 text-sm mb-2">No lifecycle data yet</p>
           <p className="text-gray-600 text-xs">Click "Run Lifecycle Demo" to simulate a 4-stage incident evolution</p>
         </div>
@@ -52,76 +57,108 @@ export default function LifecyclePage() {
       {data && (
         <>
           {/* Score Trend */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
             <h3 className="text-xs text-gray-400 uppercase tracking-wider font-bold mb-4">Rerank Score Trend</h3>
-            <div className="flex items-end gap-4 h-40">
+            <div className="flex items-end gap-6 h-36">
               {data.stages?.map((s: any, i: number) => {
                 const h = Math.max(8, (s.avg_rerank_score / 25) * 100);
                 return (
                   <div key={i} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
                     <span className="text-cyan-400 text-xl font-bold tabular-nums">{s.avg_rerank_score}</span>
-                    <div className={`w-full rounded-t-lg bg-gradient-to-t ${STAGE_COLORS[i]} transition-all duration-700`} style={{ height: `${h}%`, minHeight: 4 }} />
+                    <div className={`w-full rounded-t-lg bg-gradient-to-t ${STAGE_GRADIENTS[i].from} ${STAGE_GRADIENTS[i].to} transition-all duration-700`} style={{ height: `${h}%`, minHeight: 4 }} />
                     <span className="text-gray-500 text-[10px] text-center leading-tight">{s.stage?.split(" — ")[0]}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${s.status === "resolved" ? "status-resolved" : s.status === "investigating" ? "status-investigating" : "status-open"}`}>{s.status}</span>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Stage Cards */}
-          <div className="space-y-4">
-            {data.stages?.map((s: any, i: number) => (
-              <div key={i} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden card-hover animate-fade-in" style={{ animationDelay: `${i * 100}ms` }}>
-                {/* Stage Header */}
-                <div className={`bg-gradient-to-r ${STAGE_COLORS[i]} px-5 py-3 flex items-center justify-between`}>
-                  <div>
-                    <span className="text-white font-bold text-sm">{s.stage}</span>
-                    <span className={`ml-3 text-xs px-2 py-0.5 rounded-full bg-white/20 text-white`}>{s.status}</span>
-                  </div>
-                  <div className="text-right text-white/80 text-xs">
-                    <span>v{s.version}</span>
-                    <span className="ml-3 font-bold tabular-nums">score: {s.avg_rerank_score}</span>
-                  </div>
-                </div>
+          {/* Vertical Timeline */}
+          <div className="relative">
+            {/* Vertical line */}
+            <div className="absolute left-8 top-4 bottom-4 w-0.5 bg-gradient-to-b from-indigo-500 via-cyan-500 via-amber-500 to-emerald-500" />
 
-                <div className="p-5">
-                  <p className="text-gray-400 text-xs leading-relaxed mb-4">{s.description?.slice(0, 250)}...</p>
-
-                  <div className="grid grid-cols-5 gap-2 mb-4">
-                    {s.top5_reranked?.map((r: any, j: number) => (
-                      <div key={j} className="bg-gray-800/50 rounded-lg p-2.5 border border-gray-800 hover:border-gray-700 transition-colors">
-                        <div className="text-cyan-400 text-[10px] font-bold font-mono">{r.incident_no}</div>
-                        <div className="text-yellow-400 text-xs font-bold mt-0.5">{r.score?.toFixed(1)}</div>
-                        <div className="text-gray-500 text-[9px] leading-tight mt-1 line-clamp-2">{r.title}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {s.report_highlights?.length > 0 && (
-                    <div className="bg-gray-800/30 rounded-lg p-3 mb-3 border border-gray-800">
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1.5">Report Demo</div>
-                      {s.report_highlights.map((h: string, k: number) => (
-                        <div key={k} className="text-[10px] text-gray-400 leading-relaxed">• {h}</div>
-                      ))}
+            <div className="space-y-8">
+              {data.stages?.map((s: any, i: number) => {
+                const g = STAGE_GRADIENTS[i];
+                return (
+                  <div key={i} className="relative pl-20 animate-fade-in" style={{ animationDelay: `${i * 100}ms` }}>
+                    {/* Timeline dot */}
+                    <div className={`absolute left-[22px] top-6 w-8 h-8 rounded-full border-4 border-gray-950 ${g.dot} ${g.glow} shadow-lg flex items-center justify-center z-10`}>
+                      <span className="text-white text-[10px] font-bold">{i + 1}</span>
                     </div>
-                  )}
 
-                  {s.tasks?.length > 0 && (
-                    <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800">
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1.5">Tasks ({s.tasks.length})</div>
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                        {s.tasks.map((t: any, k: number) => (
-                          <div key={k} className="flex items-start gap-1.5 text-[10px] text-gray-500">
-                            <span className="text-gray-600 mt-0.5">○</span>
-                            <span className="leading-relaxed">T{t.task_order}. {t.description}</span>
-                          </div>
-                        ))}
+                    {/* Time label */}
+                    <div className="absolute left-[60px] -top-1 text-[10px] text-gray-600 font-mono">
+                      {s.stage?.split(" — ")[0]}
+                    </div>
+
+                    {/* Card */}
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden card-hover">
+                      <div className={`bg-gradient-to-r ${g.from} ${g.to} px-5 py-3 flex items-center justify-between`}>
+                        <div>
+                          <span className="text-white font-bold text-sm">{s.stage}</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full bg-white/20 text-white`}>{s.status}</span>
+                          <span className="text-white/70 text-xs font-mono">v{s.version}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-5">
+                        <p className="text-gray-400 text-xs leading-relaxed mb-4">{s.description?.slice(0, 250)}...</p>
+
+                        <div className="grid grid-cols-5 gap-2 mb-4">
+                          {s.top5_reranked?.map((r: any, j: number) => (
+                            <div key={j} className="bg-gray-800/50 rounded-lg p-2.5 border border-gray-800 hover:border-gray-700 transition-colors">
+                              <div className="text-cyan-400 text-[10px] font-bold font-mono">{r.incident_no}</div>
+                              <div className="text-yellow-400 text-xs font-bold mt-0.5">{r.score?.toFixed(1)}</div>
+                              <div className="text-gray-500 text-[9px] leading-tight mt-1 line-clamp-2">{r.title}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          {s.report_highlights?.length > 0 && (
+                            <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800">
+                              <div className="text-[10px] text-cyan-400 uppercase tracking-wider font-bold mb-1.5">Report Demo</div>
+                              {s.report_highlights.map((h: string, k: number) => (
+                                <div key={k} className="text-[10px] text-gray-400 leading-relaxed">• {h}</div>
+                              ))}
+                            </div>
+                          )}
+                          {s.tasks?.length > 0 && (
+                            <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800">
+                              <div className="text-[10px] text-yellow-400 uppercase tracking-wider font-bold mb-1.5">Tasks ({s.tasks.length})</div>
+                              <div className="space-y-0.5">
+                                {s.tasks.map((t: any, k: number) => (
+                                  <div key={k} className="flex items-start gap-1.5 text-[10px] text-gray-500">
+                                    <span className="text-gray-600 mt-0.5">○</span>
+                                    <span className="leading-relaxed">T{t.task_order}. {t.description}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  )}
-                </div>
-              </div>
-            ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Flow indicator at bottom */}
+          <div className="flex items-center justify-center gap-2 mt-6 text-[10px] text-gray-600">
+            <span>●</span><span className="text-gray-700">───</span>
+            <span>T+0min</span><span className="text-gray-700">→</span>
+            <span>T+10min</span><span className="text-gray-700">→</span>
+            <span>T+45min</span><span className="text-gray-700">→</span>
+            <span>T+90min</span>
+            <span className="text-gray-700">───</span><span>●</span>
+            <span className="ml-2 text-gray-500">Incident Lifecycle</span>
           </div>
         </>
       )}
