@@ -471,6 +471,30 @@ powershell -ExecutionPolicy Bypass -File run_all.ps1
 
 ---
 
+### 11.0 关键机制：触发时机与版本对应关系
+
+| 操作 | 触发函数 | 版本变化 | Re-embed | Report | Tasks |
+|------|---------|---------|----------|--------|-------|
+| 创建 ticket | `ingest_ticket()` | → v1 | description 向量生成 | **不触发** | **不触发** |
+| 更新 ticket | `update_ticket_status()` | → v2, v3, ... | 语义字段变更时重新生成 | **自动生成** | **自动生成** |
+| 单独更新描述 | `update_ticket_description()` | v+1 | 重新生成 description 向量 | **不触发** | **不触发** |
+| 单独更新根因 | `update_ticket_root_cause()` | v+1 | 重新生成 root_cause 向量 | **不触发** | **不触发** |
+
+> **设计理念**：初始创建时信息太少（仅一条模糊告警），生成汇报和任务没有意义。SRE 做第一次 triage 更新 ticket 时（`update_ticket_status`），系统才自动产出 Report + Tasks。后续每次状态转移都会重新生成。
+
+**Lifecycle 阶段与产出对照表**（当前 demo 的实际输出）：
+
+| Stage | 时间 | 状态 | v | Desc | RC | Res | Report | Tasks | Rerank Avg |
+|-------|------|------|---|------|----|-----|--------|-------|------------|
+| 0 | T+0 | open | 1 | 65 | N | N | — | — | 5.6 |
+| 1 | T+10 | investigating | 2 | 336 | N | N | v2 (STATUS + REF ×2 + NEXT) | 7 tasks | 9.4 |
+| 2 | T+45 | investigating | 3 | 575 | Y | N | v3 (STATUS + RC + REF ×2 + NEXT) | 8 tasks | 17.3 |
+| 3 | T+90 | resolved | 4 | 245 | Y | Y | v4 (STATUS + RC + ACTION + REF ×2) | 8 tasks | 18.3 |
+
+> **关键趋势**：随着 version 递增 → 信息量增加 → embedding 精度提升 → rerank 分数上升 → Report highlights 从 3 条扩展到 5 条 → Tasks 从 7 条增加到 8 条（含根因确认）。
+
+---
+
 ### 11.1 初始环境准备
 
 ```powershell
@@ -544,10 +568,10 @@ python demo_lifecycle.py
 
 ```
 Status=open  v1  desc_len=65
-  >>> REPORT DEMO (v1) <<<
-      * [STATUS] Incident is currently OPEN — severity P0
+  >>> REPORT DEMO — no report yet (first update triggers auto-generation)
+  >>> RECOMMENDED TASKS — no tasks yet (first update triggers auto-generation)
 ```
-此刻 ticket 只有一句话描述。召回分数极低（avg 5.6），匹配结果不理想。没有 root_cause，没有 resolution。
+此刻 ticket 只有一句话描述。召回分数极低（avg 5.6），匹配结果不理想。没有 root_cause，没有 resolution。**也没有 Report 和 Tasks——系统仅在 ticket 更新时触发自动生成（`update_ticket_status`），初始创建（`ingest_ticket`）不触发。** 这模拟了真实场景：工程师刚接告警、还没有任何可用信息时，不应生成汇报。
 
 #### Stage 1 — T+10min：Triage 完成
 
