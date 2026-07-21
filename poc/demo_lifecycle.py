@@ -47,6 +47,7 @@ LIFECYCLE = [
     # ── Stage 1: SRE adds detail after initial triage ──
     {
         "stage": "T+10min — Triage Complete (enriched description)",
+        "incident_no": "INC-2025-0001",
         "status": "investigating",
         "description": (
             "Payment service returning HTTP 504 Gateway Timeout on /charge endpoint. "
@@ -60,6 +61,7 @@ LIFECYCLE = [
     # ── Stage 2: Root cause identified ──
     {
         "stage": "T+45min — Root Cause Found",
+        "incident_no": "INC-2025-0001",
         "status": "investigating",
         "description": (
             "Payment service returning HTTP 504 Gateway Timeout on /charge endpoint. "
@@ -84,6 +86,7 @@ LIFECYCLE = [
     # ── Stage 3: Resolution applied, ticket resolved ──
     {
         "stage": "T+90min — Resolved",
+        "incident_no": "INC-2025-0001",
         "status": "resolved",
         "description": (
             "Payment service returning HTTP 504 Gateway Timeout on /charge endpoint. "
@@ -185,6 +188,7 @@ def main():
 
         # ── Run retrieval + rerank ──
         candidates = retrieve(ticket)
+        candidates = [c for c in candidates if c.get("incident_no") != stage["incident_no"]]
         reranked = rerank(ticket, candidates)
 
         print_rerank_table(reranked, stage["stage"])
