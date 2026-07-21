@@ -1,0 +1,71 @@
+services:
+  # ── PostgreSQL 18 + pgvector ──
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: imt-postgres
+    environment:
+      POSTGRES_USER: imt
+      POSTGRES_PASSWORD: imt_poc_2024
+      POSTGRES_DB: imt_poc
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ../poc/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imt -d imt_poc"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── FastAPI Backend ──
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: imt-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: imt_poc
+      DB_USER: imt
+      DB_PASSWORD: imt_poc_2024
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Seed database (one-shot) ──
+  seed:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: imt-seed
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: imt_poc
+      DB_USER: imt
+      DB_PASSWORD: imt_poc_2024
+    command: python /app/poc/seed_data.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Next.js Frontend ──
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    container_name: imt-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:

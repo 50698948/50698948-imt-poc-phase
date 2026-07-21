@@ -53,35 +53,53 @@ copy .env.example .env
 
 ## 2. 快速部署（一键启动所有服务）
 
-### 2.1 全栈部署
+### 2.1 方式一：Docker 容器化部署（推荐）
+
+```powershell
+cd C:\claudeWorkspace\IMT
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+自动完成：构建 3 个 Docker 镜像 → 启动 PostgreSQL + Backend + Frontend → 健康检查 → 浏览器打开。
+
+| 命令 | 用途 |
+|------|------|
+| `build.ps1` | 构建 + 启动全栈 |
+| `build.ps1 -Reset` | 清空重建 |
+| `build.ps1 -Prod` | 生产模式（不自动打开浏览器） |
+| `docker compose -f deploy/docker-compose.yml down` | 停止 |
+| `docker compose -f deploy/docker-compose.yml logs -f` | 查看日志 |
+
+**服务架构**：
+
+```
+imt-postgres     :5432    PostgreSQL 18 + pgvector (healthcheck: pg_isready)
+imt-seed         (oneshot) 灌入 49 条数据后退出
+imt-backend      :8000    FastAPI (healthcheck: /api/health)
+imt-frontend     :3000    Nginx → Next.js static export (proxy /api/ → backend)
+```
+
+### 2.2 方式二：本地脚本部署（开发调试）
 
 ```powershell
 cd C:\claudeWorkspace\IMT
 powershell -ExecutionPolicy Bypass -File deploy.ps1
 ```
 
-自动完成：PostgreSQL 启动 → 依赖安装 → 49 tickets seed → Backend API (8000) → Frontend (3000) → 浏览器自动打开
-
-### 2.2 部署选项
-
 | 命令 | 用途 |
 |------|------|
-| `deploy.ps1` | 全栈部署（DB + Backend + Frontend） |
-| `deploy.ps1 -Quick` | CLI 快速验证（跳过 Web UI，直接跑 main.py + demo_lifecycle.py） |
-| `deploy.ps1 -Backend` | 仅启动 Backend API |
-| `deploy.ps1 -Frontend` | 仅启动 Frontend |  
+| `deploy.ps1` | 全栈本地部署（PostgreSQL + Backend + Frontend） |
+| `deploy.ps1 -Quick` | CLI 快速验证 |
 | `deploy.ps1 -Stop` | 停止所有服务 |
 
-### 2.3 手动启动（分步调试）
+### 2.3 手动分步启动
 
 ```powershell
 # Terminal 1: 数据库
 cd poc && docker compose up -d && python seed_data.py
-
 # Terminal 2: Backend API
 python backend\api_server.py
-
-# Terminal 3: Frontend  
+# Terminal 3: Frontend
 cd frontend && npm run dev
 ```
 
