@@ -7,16 +7,17 @@ Incident Ticket 智能召回与分析系统的完整操作手册。
 ## 目录
 
 1. [环境准备](#1-环境准备)
-2. [启动数据库](#2-启动数据库)
-3. [灌入模拟数据](#3-灌入模拟数据)
-4. [E2E 检索 Pipeline](#4-e2e-检索-pipeline)
-5. [生命周期 Demo](#5-生命周期-demo)
-6. [Leader Report 汇报生成](#6-leader-report-汇报生成)
-7. [Engineer Task Recommendations](#7-engineer-task-recommendations---工程师推荐任务)
-8. [独立模式 — 零依赖运行](#8-独立模式--零依赖运行)
-9. [数据库操作 API](#9-数据库操作-api)
-10. [一键脚本](#10-一键脚本)
-11. [Demo 演示完整操作步骤](#11-demo-演示完整操作步骤)
+2. [快速部署（一键启动所有服务）](#2-快速部署一键启动所有服务)
+3. [启动数据库](#3-启动数据库)
+3. [灌入模拟数据](#4-灌入模拟数据)
+4. [E2E 检索 Pipeline](#5-e2e-检索-pipeline)
+5. [生命周期 Demo](#6-生命周期-demo)
+6. [Leader Report 汇报生成](#7-leader-report-汇报生成)
+7. [Engineer Task Recommendations](#8-engineer-task-recommendations---工程师推荐任务)
+8. [独立模式 — 零依赖运行](#9-独立模式--零依赖运行)
+9. [数据库操作 API](#10-数据库操作-api)
+10. [一键脚本](#11-一键脚本)
+11. [Demo 演示完整操作步骤](#13-demo-演示完整操作步骤)
 12. [常见问题](#12-常见问题)
 
 ---
@@ -50,7 +51,50 @@ copy .env.example .env
 
 ---
 
-## 2. 启动数据库
+## 2. 快速部署（一键启动所有服务）
+
+### 2.1 全栈部署
+
+```powershell
+cd C:\claudeWorkspace\IMT
+powershell -ExecutionPolicy Bypass -File deploy.ps1
+```
+
+自动完成：PostgreSQL 启动 → 依赖安装 → 49 tickets seed → Backend API (8000) → Frontend (3000) → 浏览器自动打开
+
+### 2.2 部署选项
+
+| 命令 | 用途 |
+|------|------|
+| `deploy.ps1` | 全栈部署（DB + Backend + Frontend） |
+| `deploy.ps1 -Quick` | CLI 快速验证（跳过 Web UI，直接跑 main.py + demo_lifecycle.py） |
+| `deploy.ps1 -Backend` | 仅启动 Backend API |
+| `deploy.ps1 -Frontend` | 仅启动 Frontend |  
+| `deploy.ps1 -Stop` | 停止所有服务 |
+
+### 2.3 手动启动（分步调试）
+
+```powershell
+# Terminal 1: 数据库
+cd poc && docker compose up -d && python seed_data.py
+
+# Terminal 2: Backend API
+python backend\api_server.py
+
+# Terminal 3: Frontend  
+cd frontend && npm run dev
+```
+
+### 2.4 CLI 快速测试
+
+```powershell
+cd poc
+powershell -ExecutionPolicy Bypass -File run_all.ps1
+```
+
+---
+
+## 3. 启动数据库
 
 ### 2.1 启动 PostgreSQL 18 + pgvector
 
@@ -98,7 +142,7 @@ docker compose down -v
 
 ---
 
-## 3. 灌入模拟数据
+## 4. 灌入模拟数据
 
 ### 3.1 灌入 20 条历史 incident ticket
 
@@ -159,7 +203,7 @@ ingest_ticket(
 
 ---
 
-## 4. E2E 检索 Pipeline
+## 5. E2E 检索 Pipeline
 
 ### 4.1 运行完整检索流程
 
@@ -193,7 +237,7 @@ CURRENT_TICKET = {
 
 ---
 
-## 5. 生命周期 Demo
+## 6. 生命周期 Demo
 
 ### 5.1 运行
 
@@ -231,7 +275,7 @@ python demo_lifecycle.py
 
 ---
 
-## 6. Leader Report 汇报生成
+## 7. Leader Report 汇报生成
 
 ### 6.1 自动生成机制
 
@@ -287,7 +331,7 @@ v4  [STATUS] RESOLVED  |  [ROOT CAUSE] N+1 connection pattern...  |  [ACTION] Ro
 
 ---
 
-## 7. Engineer Task Recommendations — 工程师推荐任务
+## 8. Engineer Task Recommendations — 工程师推荐任务
 
 ### 7.1 自动生成机制
 
@@ -344,7 +388,7 @@ in_progress → rejected
 
 ---
 
-## 8. 独立模式 — 零依赖运行
+## 9. 独立模式 — 零依赖运行
 
 ### 8.1 适用场景
 
@@ -382,7 +426,7 @@ python poc_standalone.py
 
 ---
 
-## 9. 数据库操作 API
+## 10. 数据库操作 API
 
 ### 9.1 入库
 
@@ -448,7 +492,7 @@ revise_task(tasks[0]["id"], status="completed", revised_by="david.lin",
 
 ---
 
-## 10. 一键脚本
+## 11. 一键脚本
 
 ```powershell
 cd C:\claudeWorkspace\IMT\poc
@@ -465,7 +509,7 @@ powershell -ExecutionPolicy Bypass -File run_all.ps1
 
 ---
 
-## 11. Demo 演示完整操作步骤
+## 13. Demo 演示完整操作步骤
 
 > 以下是一套完整的演示流程，按 Feature 顺序逐步展示。每条命令均可直接复制运行。
 
