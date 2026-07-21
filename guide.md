@@ -510,17 +510,17 @@ Start-Sleep -Seconds 5
 docker ps --filter "name=imt-poc-db"
 # 期望: Up XX seconds (healthy)
 
-# 4. 灌入模拟数据（35 条：20 resolved + 15 含 investigating/mitigated/open）
+# 4. 灌入模拟数据（49 条）
 python seed_data.py
-# 期望: Seeded 35 tickets. Done.
+# 期望: Seeded 49 tickets. Done.
 ```
 
 **数据概览**（seed 后可验证）：
 
 | 统计 | 数量 |
 |------|------|
-| 总 ticket | 35 |
-| resolved | 28 |
+| 总 ticket | 49 |
+| resolved | 36 |
 | investigating | 4 |
 | mitigated | 1 |
 | open | 1 |
@@ -531,6 +531,10 @@ python seed_data.py
 ---
 
 ### 11.2 Feature 1 — E2E 检索 Pipeline（展示智能召回）
+
+**CLI 方式**：`python main.py`
+
+**Web 方式**：浏览器打开 `http://localhost:3000/retrieve`，填写 incident 信息后点击 Run Retrieval。
 
 ```powershell
 python main.py
@@ -852,7 +856,12 @@ FINAL_TOPK = 5      # 精排后最终返回数
 | `recommend.py` | 任务推荐引擎 | idea.md §10 |
 | `reranker.py` | 余弦精排 | idea.md §6 |
 | `retrieval.py` | RRF 融合 | idea.md §6 |
-| `seed_data.py` | 35 条模拟数据 | guide.md §3 |
+| `seed_data.py` | 49 条模拟数据 | guide.md §3 |
+| `backend/api_server.py` | FastAPI REST 服务 | — |
+| `frontend/src/app/page.tsx` | Dashboard 页面 | — |
+| `frontend/src/app/retrieve/page.tsx` | E2E 检索页面 | guide.md §11.2 |
+| `frontend/src/app/lifecycle/page.tsx` | 生命周期演示页面 | guide.md §11.3 |
+| `frontend/src/app/tasks/page.tsx` | 任务看板页面 | — |
 
 ### A.2 数据库表对齐
 

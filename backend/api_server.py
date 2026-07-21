@@ -87,7 +87,7 @@ def health():
 
 @app.post("/api/seed")
 def seed_database():
-    """Seed the database with 35 mock tickets."""
+    """Seed the database with 49 mock tickets."""
     try:
         ids = ingest_tickets_batch(SEED_TICKETS)
         return {"status": "ok", "count": len(ids), "ids": ids}
