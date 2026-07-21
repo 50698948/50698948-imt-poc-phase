@@ -28,12 +28,19 @@ const SEV_CLASS: Record<string, string> = {
 export default function DashboardPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterSeverity, setFilterSeverity] = useState("");
+  const [filterService, setFilterService] = useState("");
+  const [filterCategory, setFilterCategory] = useState("");
 
   const load = async (seedFirst = false) => {
     setLoading(true);
     try {
       if (seedFirst) { await fetch(`${API}/api/seed`, { method: "POST" }); }
-      const data = await fetch(`${API}/api/tickets?limit=50`).then((r) => r.json());
+      const params = new URLSearchParams();
+      if (filterSeverity) params.set("severity", filterSeverity);
+      if (filterService) params.set("service", filterService);
+      if (filterCategory) params.set("category", filterCategory);
+      const data = await fetch(`${API}/api/tickets?limit=50&${params}`).then((r) => r.json());
       setTickets(data);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -54,6 +61,42 @@ export default function DashboardPage() {
         <button onClick={() => load(true)} className="flex items-center gap-2 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg px-4 py-2 text-xs font-bold transition-all duration-200 shadow-lg shadow-cyan-900/30">
           <span>⟳</span> Re-Seed
         </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-3 mb-3 shrink-0">
+        <span className="text-[10px] text-gray-600 uppercase tracking-wider">Filter:</span>
+        <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); load(false); }}
+          className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-[11px] text-gray-300 cursor-pointer hover:border-gray-600 transition-colors">
+          <option value="">All Severities</option>
+          <option value="P0">P0 — Critical</option>
+          <option value="P1">P1 — High</option>
+          <option value="P2">P2 — Medium</option>
+          <option value="P3">P3 — Low</option>
+        </select>
+        <select value={filterService} onChange={(e) => { setFilterService(e.target.value); load(false); }}
+          className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-[11px] text-gray-300 cursor-pointer hover:border-gray-600 transition-colors">
+          <option value="">All Services</option>
+          {["order-service","payment-service","api-gateway","auth-service","notification-service","reporting-service","search-service","session-service","product-service","inventory-service","image-service","recommendation-service","social-feed","game-leaderboard","data-platform","data-export-service","infra-network","infra-dns","infra-tf","infra-platform","infra-secrets","k8s-cluster","ecs-cluster","etcd-cluster","istio-mesh","cicd-pipeline","artifact-repo","monitoring","websocket-gateway","storage-s3","ci-build-agents"].map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <select value={filterCategory} onChange={(e) => { setFilterCategory(e.target.value); load(false); }}
+          className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-[11px] text-gray-300 cursor-pointer hover:border-gray-600 transition-colors">
+          <option value="">All Categories</option>
+          <option value="database">Database</option>
+          <option value="application">Application</option>
+          <option value="network">Network</option>
+          <option value="infrastructure">Infrastructure</option>
+          <option value="security">Security</option>
+        </select>
+        {(filterSeverity || filterService || filterCategory) && (
+          <button onClick={() => { setFilterSeverity(""); setFilterService(""); setFilterCategory(""); load(false); }}
+            className="text-[10px] text-gray-500 hover:text-gray-300 border border-gray-700 hover:border-gray-500 rounded-lg px-2 py-1 transition-colors">
+            Clear ✕
+          </button>
+        )}
+        <span className="text-[10px] text-gray-700 ml-auto">{tickets.length} shown</span>
       </div>
 
       {/* Kanban Board */}
