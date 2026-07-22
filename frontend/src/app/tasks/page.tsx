@@ -152,6 +152,9 @@ export default function TaskBoardPage() {
                 <input value={assignTo} onChange={(e) => setAssignTo(e.target.value)}
                   placeholder="Assign to..."
                   className="bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1.5 text-[10px] text-gray-600 w-28 focus:outline-none focus:border-indigo-300" />
+                <button onClick={() => { if (!assignTo) return; for (const id of selectedIds) reviseTask(id, { revised_by: assignTo }); loadHistory(); }}
+                  disabled={selectedIds.size === 0 || !assignTo}
+                  className="text-[10px] bg-white border border-gray-200 hover:border-indigo-300 disabled:opacity-30 text-gray-600 rounded-lg px-2.5 py-1.5 font-medium">Assign</button>
                 <button onClick={() => { loadHistory(); setShowHistory(!showHistory); }} className={`text-[10px] border rounded-lg px-2.5 py-1.5 font-medium ${showHistory ? "bg-indigo-50 text-indigo-600 border-indigo-200" : "text-gray-500 border-gray-200 hover:border-gray-300"}`}>History</button>
                 <span className="text-gray-200">|</span>
                 <button onClick={() => bulkAction("in_progress")} disabled={selectedIds.size === 0} className="text-[10px] bg-indigo-500 hover:bg-indigo-600 disabled:opacity-30 text-white rounded-lg px-3 py-1.5 font-medium">Accept</button>
@@ -206,8 +209,8 @@ export default function TaskBoardPage() {
                     {t.revision_note && <span className="text-gray-500">· {t.revision_note.slice(0,50)}</span>}
                   </div>
                   <div className="flex gap-1 mt-1.5">
-                    {!editingId && <button onClick={() => { setEditingId(t.id); setEditText(t.description); }} className="text-[9px] text-gray-400 hover:text-gray-600">✎</button>}
-                    {assignTo && <button onClick={() => reviseTask(t.id, { revised_by: assignTo })} className="text-[9px] text-gray-400 hover:text-indigo-600 ml-1.5">👤</button>}
+                    {!editingId && <button onClick={() => { setEditingId(t.id); setEditText(t.description); }} className="text-[9px] text-gray-400 hover:text-gray-600">✎ Edit</button>}
+                    {!editingId && <button onClick={() => { const name = prompt("Assign to:"); if (name) reviseTask(t.id, { revised_by: name }); }} className="text-[9px] text-gray-400 hover:text-indigo-600 ml-1">👤 Assign</button>}
                     {t.status === "pending" && <button onClick={() => reviseTask(t.id, { status: "in_progress", revised_by: assignTo || "demo-user" })} className="text-[9px] text-indigo-500 font-medium ml-2">Accept</button>}
                     {t.status === "in_progress" && <button onClick={() => { const r=prompt("Result:"); if(r) reviseTask(t.id,{status:"completed",revision_note:r}); }} className="text-[9px] text-emerald-500 font-medium ml-2">Complete</button>}
                     {(t.status==="pending"||t.status==="in_progress") && <button onClick={()=>{const r=prompt("Reason:");if(r)reviseTask(t.id,{status:"rejected",revision_note:r});}} className="text-[9px] text-red-400 ml-2">Reject</button>}
