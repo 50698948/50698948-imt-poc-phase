@@ -145,6 +145,13 @@ CREATE TABLE IF NOT EXISTS leader_reports (
     ticket_version INTEGER NOT NULL,
     content TEXT NOT NULL,
     highlights TEXT DEFAULT '[]',
+    report_status TEXT DEFAULT 'draft',
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_notes TEXT,
+    published_at TEXT,
+    published_by TEXT,
+    revised_fields TEXT DEFAULT '[]',
     generated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_reports_inc ON leader_reports(incident_no, ticket_version);
@@ -530,7 +537,9 @@ def get_report_history_standalone(incident_no):
         (incident_no,)).fetchall()
     conn.close()
     return [{"ticket_version": r["ticket_version"], "highlights": json.loads(r["highlights"]),
-             "generated_at": r["generated_at"]} for r in rows]
+             "generated_at": r["generated_at"], "content": r["content"],
+             "report_status": r["report_status"] if "report_status" in r.keys() else "draft"}
+            for r in rows]
 
 
 # ── Engineer Task Recommendations ──
