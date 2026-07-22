@@ -264,6 +264,90 @@ def generate_report_for_ticket(incident_no: str):
             "tasks_count": len(tasks)}
 
 
+class CreateIncidentRequest(BaseModel):
+    title: str
+    description: str
+    severity: str
+    service_name: str
+    category: str = "application"
+    error_type: Optional[str] = None
+    source: str = "manual"
+
+
+@app.post("/api/incidents/create")
+def create_incident(req: CreateIncidentRequest):
+    """Create a new incident ticket with automatic retrieval."""
+    incident_no = f"INC-{time.strftime('%Y')}-{str(uuid.uuid4().int % 10000).zfill(4)}"
+    ticket_data = {
+        "incident_no": incident_no,
+        "title": req.title,
+        "description": req.description,
+        "severity": req.severity,
+        "service_name": req.service_name,
+        "category": req.category,
+        "status": "open",
+        "error_type": req.error_type,
+    }
+    ingest(ticket_data)
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        raise HTTPException(status_code=500, detail="Failed to create ticket")
+
+    candidates = retrieve(ticket)
+    reranked = rerank(ticket, candidates)
+
+    return {
+        "incident_no": incident_no,
+        "ticket": ticket,
+        "top5_similar": [{"incident_no": r.get("incident_no"), "title": r.get("title"), "score": r.get("rerank_score")} for r in reranked[:5]],
+    }
+
+
+class XMatterAlert(BaseModel):
+    alertId: Optional[str] = None
+    title: str
+    description: str
+    severity: str  # critical/warning/info
+    affectedService: Optional[str] = None
+    tags: Optional[list[str]] = None
+
+
+@app.post("/api/alerts/xmatter")
+def receive_xmatter_alert(alert: XMatterAlert):
+    """Receive xMatter alert webhook — auto-create incident + retrieve similar."""
+    sev_map = {"critical": "P0", "warning": "P1", "info": "P2"}
+    severity = sev_map.get(alert.severity.lower(), "P1")
+    service = alert.affectedService or "unknown"
+    error_type = None
+    if alert.tags:
+        known = {"timeout", "OOM", "deadlock", "race_condition", "config_error", "dependency_failure", "resource_exhaustion", "auth_error", "rate_limit"}
+        for t in alert.tags:
+            if t in known: error_type = t; break
+
+    incident_no = f"INC-{time.strftime('%Y')}-{str(uuid.uuid4().int % 10000).zfill(4)}"
+    ingest({
+        "incident_no": incident_no,
+        "title": alert.title,
+        "description": f"[xMatter Alert {alert.alertId or 'N/A'}] {alert.description}",
+        "severity": severity,
+        "service_name": service,
+        "category": "application",
+        "status": "open",
+        "error_type": error_type,
+    })
+    ticket = get_ticket(incident_no)
+    candidates = retrieve(ticket)
+    reranked = rerank(ticket, candidates)
+
+    return {
+        "incident_no": incident_no,
+        "source": "xmatter",
+        "alert_id": alert.alertId,
+        "top5_similar": [{"incident_no": r.get("incident_no"), "title": r.get("title"), "score": r.get("rerank_score")} for r in reranked[:5]],
+        "summary": f"Created {incident_no}. Found {len(reranked)} similar cases."
+    }
+
+
 @app.get("/api/tasks/{incident_no}")
 def get_tasks(incident_no: str):
     """Get recommended tasks for a ticket."""
