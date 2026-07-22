@@ -1,234 +1,169 @@
-"use client";
-
-import { useState } from "react";
-import Link from "next/link";
-
+"use client"; import { useState, useEffect } from "react";
 const API = "http://localhost:8000";
 
-const STAGE_COLORS = [
-  { line: "bg-indigo-500", dot: "bg-indigo-500", glow: "shadow-indigo-500/50", headerFrom: "from-indigo-600", headerTo: "to-blue-600" },
-  { line: "bg-cyan-500", dot: "bg-cyan-500", glow: "shadow-cyan-500/50", headerFrom: "from-cyan-600", headerTo: "to-teal-600" },
-  { line: "bg-amber-500", dot: "bg-amber-500", glow: "shadow-amber-500/50", headerFrom: "from-amber-600", headerTo: "to-orange-600" },
-  { line: "bg-emerald-500", dot: "bg-emerald-500", glow: "shadow-emerald-500/50", headerFrom: "from-emerald-600", headerTo: "to-green-600" },
-];
-
-function StageCard({ stage, index, defaultExpanded }: { stage: any; index: number; defaultExpanded: boolean }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const g = STAGE_COLORS[index];
-
-  const statusColor: Record<string, string> = {
-    open: "bg-red-950/40 text-red-300 border-red-800/50",
-    investigating: "bg-yellow-950/40 text-yellow-300 border-yellow-800/50",
-    mitigated: "bg-blue-950/40 text-blue-300 border-blue-800/50",
-    resolved: "bg-emerald-950/40 text-emerald-300 border-emerald-800/50",
-  };
-
-  return (
-    <div className="animate-fade-in" style={{ animationDelay: `${index * 80}ms` }}>
-      {/* Collapsed Header */}
-      <button onClick={() => setExpanded(!expanded)}
-        className="w-full text-left bg-gray-900 border border-gray-800 hover:border-gray-700 rounded-xl overflow-hidden transition-all duration-200 group">
-        <div className={`bg-gradient-to-r ${g.headerFrom} ${g.headerTo} px-4 py-2.5 flex items-center justify-between`}>
-          <div className="flex items-center gap-3">
-            <span className="text-white text-xs font-mono opacity-70">{stage.stage?.split(" — ")[0]}</span>
-            <span className="text-white font-bold text-sm">{stage.stage}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className={`text-[10px] px-2 py-0.5 rounded-full ${statusColor[stage.status] || "bg-white/20 text-white"}`}>
-              {stage.status}
-            </span>
-            <span className="text-white/60 text-xs font-mono">v{stage.version}</span>
-            <span className="text-yellow-200 font-bold text-sm tabular-nums ml-2">score {stage.avg_rerank_score}</span>
-            <span className={`text-white/70 text-sm transition-transform duration-300 ${expanded ? "rotate-90" : ""}`}>▶</span>
-          </div>
-        </div>
-      </button>
-
-      {/* Expanded Content */}
-      <div className={`overflow-hidden transition-all duration-300 ${expanded ? "max-h-[2000px] opacity-100 mt-2" : "max-h-0 opacity-0"}`}>
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          {/* Description */}
-          <div className="mb-4">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1.5">Current Description</div>
-            <p className="text-gray-400 text-xs leading-relaxed">{stage.description}</p>
-            {stage.root_cause && (
-              <div className="mt-2 bg-purple-950/20 border border-purple-900/30 rounded-lg px-3 py-2">
-                <span className="text-purple-400 text-[10px] font-bold">Root Cause: </span>
-                <span className="text-purple-300 text-xs">{stage.root_cause}</span>
-              </div>
-            )}
-            {stage.resolution && (
-              <div className="mt-2 bg-emerald-950/20 border border-emerald-900/30 rounded-lg px-3 py-2">
-                <span className="text-emerald-400 text-[10px] font-bold">Resolution: </span>
-                <span className="text-emerald-300 text-xs">{stage.resolution}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Top-5 Matches */}
-          <div className="mb-4">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1.5">Top-5 Similar Historical Tickets</div>
-            <div className="grid grid-cols-5 gap-2">
-              {stage.top5_reranked?.map((r: any, j: number) => (
-                <Link key={j} href={`/incident/${r.incident_no}`}
-                  className="bg-gray-800/50 rounded-lg p-2.5 border border-gray-800 hover:border-cyan-700 hover:bg-gray-800 transition-all cursor-pointer block group">
-                  <div className="text-cyan-400 text-[10px] font-bold font-mono group-hover:text-cyan-300">{r.incident_no}</div>
-                  <div className="text-yellow-400 text-xs font-bold mt-0.5">{r.score?.toFixed(1)}</div>
-                  <div className="text-gray-500 text-[9px] leading-tight mt-1 line-clamp-2 group-hover:text-gray-400">{r.title}</div>
-                  <div className="text-gray-600 text-[8px] mt-1 truncate">{r.reason}</div>
-                </Link>
-              ))}
-            </div>
-          </div>
-
-          {/* Report + Tasks side by side */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800">
-              <div className="text-[10px] text-cyan-400 uppercase tracking-wider font-bold mb-1.5">Report Demo</div>
-              {stage.report_highlights?.length > 0
-                ? stage.report_highlights.map((h: string, k: number) => {
-                    const tag = h.match(/^\[(\w[\w\s]*)\]/)?.[1] || "";
-                    return (
-                      <div key={k} className="text-[10px] text-gray-400 leading-relaxed mb-0.5">
-                        {tag && <span className="text-cyan-500 font-bold mr-1">[{tag}]</span>}
-                        {h.replace(/^\[[\w\s]*\]\s*/, "")}
-                      </div>
-                    );
-                  })
-                : <div className="text-[10px] text-gray-600 italic">No report — generated on first update</div>
-              }
-            </div>
-            <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800">
-              <div className="text-[10px] text-yellow-400 uppercase tracking-wider font-bold mb-1.5">Tasks ({stage.tasks?.length || 0})</div>
-              {stage.tasks?.length > 0 ? (
-                <div className="space-y-0.5">
-                  {stage.tasks.map((t: any, k: number) => (
-                    <div key={k} className="flex items-start gap-1.5 text-[10px] text-gray-500">
-                      <span className="text-gray-600 mt-0.5 shrink-0">○</span>
-                      <span className="leading-relaxed">T{t.task_order}. {t.description}</span>
-                      <span className="text-gray-700 text-[8px] shrink-0 ml-auto">{t.source}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[10px] text-gray-600 italic">No tasks — generated on first update</div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+const EVENT_CONFIG: Record<string, { color: string; bg: string; border: string; icon: string; label: string }> = {
+  created: { color: "text-emerald-600", bg: "bg-emerald-50", border: "border-emerald-200", icon: "●", label: "Created" },
+  report: { color: "text-indigo-600", bg: "bg-indigo-50", border: "border-indigo-200", icon: "📄", label: "Report" },
+  tasks: { color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-200", icon: "📋", label: "Tasks" },
+};
 
 export default function LifecyclePage() {
-  const [data, setData] = useState<any>(null);
+  const [incidents, setIncidents] = useState<any[]>([]);
+  const [selected, setSelected] = useState("");
+  const [timeline, setTimeline] = useState<any>(null);
+  const [ticket, setTicket] = useState<any>(null);
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [searchText, setSearchText] = useState("");
+  const [showAll, setShowAll] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [expandAll, setExpandAll] = useState(true);
 
-  const run = async () => {
-    setLoading(true);
+  useEffect(() => { fetch(`${API}/api/tickets?limit=50`).then((r) => r.json()).then(setIncidents); }, []);
+
+  const loadTimeline = async (no: string) => {
+    setSelected(no); setLoading(true); setExpandedIdx(null);
     try {
-      await fetch(`${API}/api/seed`, { method: "POST" });
-      const res = await fetch(`${API}/api/lifecycle`, { method: "POST" });
-      setData(await res.json());
-    } catch (e) { console.error(e); }
+      const [tR, tlR] = await Promise.all([fetch(`${API}/api/tickets/${no}`), fetch(`${API}/api/incidents/${no}/timeline`)]);
+      setTicket(await tR.json()); setTimeline(await tlR.json());
+    } catch { setTimeline(null); setTicket(null); }
     setLoading(false);
   };
 
+  const runDemo = async () => {
+    setLoading(true);
+    try { await fetch(`${API}/api/seed`, { method: "POST" }); await fetch(`${API}/api/lifecycle`, { method: "POST" }); await loadTimeline("INC-2025-0001"); } catch {}
+    setLoading(false);
+  };
+
+  const filtered = incidents.filter((t: any) => searchText ? `${t.incident_no} ${t.title}`.toLowerCase().includes(searchText.toLowerCase()) : true);
+  const displayed = showAll ? filtered : filtered.slice(0, 10);
+
+  const events = timeline?.events ? [...timeline.events].sort((a: any, b: any) => (a.time || "").localeCompare(b.time || "")) : [];
+  const created = events.find((e: any) => e.type === "created");
+
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Lifecycle Demo</h1>
-          <p className="text-gray-500 text-xs mt-1">Simulate incident evolution — click stage headers to expand/collapse</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setExpandAll(!expandAll)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-600">
-            {expandAll ? "Collapse All" : "Expand All"}
-          </button>
-          <button onClick={run} disabled={loading}
-            className="flex items-center gap-2 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-bold transition-all shadow-lg shadow-cyan-900/30">
-            <span>{loading ? "◷" : "▶"}</span> {loading ? "Running 4 Stages..." : "Run Lifecycle Demo"}
-          </button>
-        </div>
+        <div><h1 className="text-2xl font-bold text-gray-900">Lifecycle</h1><p className="text-gray-500 text-xs mt-1">View incident event timeline — select from table or run demo</p></div>
+        <button onClick={runDemo} disabled={loading} className="btn-brand flex items-center gap-2 text-xs">{loading ? "◷" : "▶"} Run Demo</button>
       </div>
 
-      {!data && !loading && (
-        <div className="text-center py-24">
-          <div className="text-6xl mb-4">◷</div>
-          <p className="text-gray-500 text-sm mb-2">No lifecycle data yet</p>
-          <p className="text-gray-600 text-xs">Click "Run Lifecycle Demo" to simulate a 4-stage incident evolution</p>
+      {/* ── Incident Table ── */}
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden mb-6">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Incidents</h2>
+            <span className="text-[10px] text-gray-400">{filtered.length} total</span>
+          </div>
+          <div className="relative">
+            <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="Filter..."
+              className="bg-white border border-gray-200 rounded-lg pl-7 pr-3 py-1.5 text-[11px] text-gray-600 w-48 focus:outline-none focus:border-indigo-300" />
+            <span className="absolute left-2 top-1.5 text-gray-400 text-[11px]">🔍</span>
+          </div>
         </div>
-      )}
+        <table className="w-full text-xs">
+          <thead><tr className="border-b border-gray-100 bg-gray-50/30 text-gray-400 uppercase tracking-wider text-[10px]">
+            <th className="text-center px-3 py-2 w-8"></th><th className="text-left px-2 py-2 w-36">Incident</th><th className="text-left px-2 py-2">Title</th><th className="text-center px-2 py-2 w-16">Status</th><th className="text-center px-2 py-2 w-12">Sev</th><th className="text-left px-2 py-2 w-24">Service</th><th className="text-center px-3 py-2 w-16">Events</th>
+          </tr></thead>
+          <tbody className="divide-y divide-gray-50">
+            {displayed.map((t: any) => (
+              <tr key={t.incident_no} onClick={() => loadTimeline(t.incident_no)}
+                className={`cursor-pointer transition-colors ${selected === t.incident_no ? "bg-indigo-50" : "hover:bg-gray-50"}`}>
+                <td className="px-3 py-2.5 text-center"><input type="checkbox" checked={selected === t.incident_no} onChange={() => loadTimeline(t.incident_no)} className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer" /></td>
+                <td className="px-2 py-2.5"><span className="text-indigo-600 font-bold font-mono text-[10px]">{t.incident_no}</span></td>
+                <td className="px-2 py-2.5 text-gray-700 max-w-xs truncate">{t.title}</td>
+                <td className="px-2 py-2.5 text-center"><span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${t.status==="resolved"?"bg-emerald-50 text-emerald-600":t.status==="investigating"?"bg-amber-50 text-amber-600":"bg-red-50 text-red-600"}`}>{t.status}</span></td>
+                <td className="px-2 py-2.5 text-center"><span className={`text-[9px] font-bold ${t.severity === "P0" ? "text-red-500" : t.severity === "P1" ? "text-orange-500" : "text-gray-500"}`}>{t.severity}</span></td>
+                <td className="px-2 py-2.5 text-gray-500 text-[10px]">{t.service_name}</td>
+                <td className="px-3 py-2.5 text-center text-gray-400 text-[10px]">{t.version}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length > 10 && (
+          <button onClick={() => setShowAll(!showAll)} className="w-full text-center py-2 text-[10px] text-gray-400 hover:text-gray-600 border-t border-gray-50">{showAll ? "Show fewer" : `Show all ${filtered.length}`}</button>
+        )}
+      </div>
 
-      {loading && (
-        <div className="space-y-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="bg-gray-900 border border-gray-800 rounded-xl p-6 animate-shimmer h-16" />
-          ))}
+      {/* ── Timeline ── */}
+      {!selected ? (
+        <div className="bg-white border border-gray-200 rounded-2xl p-16 text-center">
+          <div className="text-4xl mb-3">◷</div><p className="text-gray-500 text-sm mb-1">Select an incident or run demo</p><p className="text-gray-400 text-xs">Timeline shows all events: creation, report generation, task generation</p>
         </div>
-      )}
+      ) : loading ? (
+        <div className="bg-white border border-gray-200 rounded-2xl p-8"><div className="animate-shimmer h-48 rounded-lg" /></div>
+      ) : (
+        <>
+          {/* Header */}
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-6">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-3 mb-1.5">
+                  <span className="text-indigo-600 font-bold text-lg font-mono">{timeline?.incident_no}</span>
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${timeline?.status === "resolved" ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>{timeline?.status}</span>
+                  <span className="text-gray-400 text-xs font-mono">v{timeline?.version}</span>
+                </div>
+                <h1 className="text-gray-800 text-sm font-medium">{timeline?.title}</h1>
+              </div>
+              <div className="text-right"><div className="text-[10px] text-gray-400">Created</div><div className="text-xs text-gray-600 font-mono">{created?.time?.slice(0,16)||"—"}</div></div>
+            </div>
+          </div>
 
-      {data && (
-        <div className="relative">
-          {/* Score Bar */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6">
-            <div className="flex items-end gap-4 h-24">
-              {data.stages?.map((s: any, i: number) => {
-                const h = Math.max(6, (s.avg_rerank_score / 25) * 100);
-                const g = STAGE_COLORS[i];
+          {/* Stats */}
+          <div className="grid grid-cols-4 gap-2 mb-6">
+            {[{label:"Events",value:events.length,color:"text-gray-700"},{label:"Created",value:events.filter((e:any)=>e.type==="created").length,color:"text-emerald-600"},{label:"Reports",value:events.filter((e:any)=>e.type==="report").length,color:"text-indigo-600"},{label:"Tasks",value:events.filter((e:any)=>e.type==="tasks").length,color:"text-amber-600"}].map((s,i)=>(
+              <div key={i} className="bg-white border border-gray-200 rounded-xl p-3 text-center"><div className={`text-xl font-bold ${s.color}`}>{s.value}</div><div className="text-[10px] text-gray-400 mt-0.5">{s.label}</div></div>
+            ))}
+          </div>
+
+          {/* Vertical Timeline */}
+          <div className="relative">
+            <div className="absolute left-[19px] top-3 bottom-8 w-0.5 bg-gray-200" />
+            <div className="space-y-1">
+              {events.map((event: any, i: number) => {
+                const cfg = EVENT_CONFIG[event.type] || EVENT_CONFIG.created;
+                const isExpanded = expandedIdx === i;
+                const timeStr = event.time?.slice(11,16)||"";
+                const dateStr = event.time?.slice(0,10)||"";
                 return (
-                  <div key={i} className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end">
-                    <span className="text-cyan-400 text-lg font-bold tabular-nums">{s.avg_rerank_score}</span>
-                    <div className={`w-full rounded-t-lg bg-gradient-to-t ${g.headerFrom} ${g.headerTo} transition-all duration-700`} style={{ height: `${h}%` }} />
-                    <span className="text-gray-500 text-[10px]">{s.stage?.split(" — ")[0]}</span>
+                  <div key={i} className="relative pl-12 animate-fade-in" style={{ animationDelay: `${i*50}ms` }}>
+                    <button onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                      className={`absolute left-[11px] top-[18px] w-[18px] h-[18px] rounded-full border-[3px] border-white shadow-sm z-10 flex items-center justify-center transition-all hover:scale-125 ${cfg.bg} ${cfg.border}`}>
+                      <span className="text-[9px]">{cfg.icon}</span>
+                    </button>
+                    <div className="text-[10px] text-gray-400 font-mono mb-1 mt-2">{timeStr}{dateStr !== events[0]?.time?.slice(0,10) && <span className="text-gray-300 ml-1">{dateStr}</span>}</div>
+                    <div className="ml-1">
+                      <button onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                        className="w-full text-left bg-white border border-gray-200 hover:border-gray-300 rounded-xl p-4 transition-all">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-[10px] font-bold uppercase tracking-wider ${cfg.color}`}>{cfg.label}</span>
+                          <span className="text-[10px] text-gray-500">{event.title}</span>
+                        </div>
+                        {isExpanded && (
+                          <div className={`mt-3 ${cfg.bg} rounded-lg p-3 border ${cfg.border}`}>
+                            <p className="text-[10px] text-gray-600 leading-relaxed whitespace-pre-wrap">{event.detail}</p>
+                            {event.type === "report" && event.detail && (
+                              <div className="mt-2 space-y-0.5">{event.detail.split("|").map((h:string,j:number)=>(<div key={j} className="text-[9px] text-gray-500">• {h.trim()}</div>))}</div>
+                            )}
+                            <div className="text-[8px] text-gray-400 mt-2">{event.time}</div>
+                          </div>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Vertical Timeline */}
-          <div className="relative pl-12">
-            {/* Gradient vertical line */}
-            <div className="absolute left-[22px] top-10 bottom-8 w-0.5 bg-gradient-to-b from-indigo-500 via-cyan-500 via-amber-500 to-emerald-500" />
-
-            <div className="space-y-3">
-              {data.stages?.map((s: any, i: number) => (
-                <div key={i} className="relative">
-                  {/* Timeline dot + connector */}
-                  <div className={`absolute left-[-30px] top-4 w-4 h-4 rounded-full border-[3px] border-gray-950 ${STAGE_COLORS[i].dot} ${STAGE_COLORS[i].glow} shadow-lg z-10`} />
-
-                  {/* Time label */}
-                  <div className="absolute left-[-72px] top-[14px] text-[9px] text-gray-600 font-mono w-10 text-right">
-                    {s.stage?.split(" — ")[0]}
-                  </div>
-
-                  {/* Card */}
-                  <StageCard stage={s} index={i} defaultExpanded={expandAll} />
-                </div>
-              ))}
+          {/* Full Details */}
+          {ticket && (
+            <div className="bg-white border border-gray-200 rounded-2xl p-5 mt-6 space-y-4">
+              <div><h3 className="text-xs text-gray-400 uppercase font-bold mb-2">Description</h3><p className="text-gray-600 text-xs leading-relaxed whitespace-pre-wrap">{ticket.description}</p></div>
+              {ticket.root_cause && <div className="border-t border-gray-100 pt-4"><h3 className="text-xs text-gray-400 uppercase font-bold mb-2">Root Cause</h3><div className="bg-red-50 border border-red-100 rounded-lg p-3"><p className="text-gray-700 text-xs leading-relaxed">{ticket.root_cause}</p></div></div>}
+              {ticket.resolution && <div className="border-t border-gray-100 pt-4"><h3 className="text-xs text-gray-400 uppercase font-bold mb-2">Resolution</h3><div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3"><p className="text-gray-700 text-xs leading-relaxed">{ticket.resolution}</p></div></div>}
             </div>
-          </div>
-
-          {/* Flow indicator */}
-          <div className="flex items-center justify-center gap-2 mt-6 text-[10px] text-gray-700">
-            <span className="w-2 h-2 rounded-full bg-indigo-500" />
-            <span className="text-gray-600">T+0</span>
-            <span className="text-gray-800">→</span>
-            <span className="w-2 h-2 rounded-full bg-cyan-500" />
-            <span className="text-gray-600">T+10</span>
-            <span className="text-gray-800">→</span>
-            <span className="w-2 h-2 rounded-full bg-amber-500" />
-            <span className="text-gray-600">T+45</span>
-            <span className="text-gray-800">→</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            <span className="text-gray-600">T+90</span>
-            <span className="ml-2 text-gray-600">— Incident Lifecycle ({data.stages?.length} stages)</span>
-          </div>
-        </div>
+          )}
+        </>
       )}
     </div>
   );

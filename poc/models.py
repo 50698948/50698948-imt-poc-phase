@@ -72,6 +72,13 @@ class LeaderReport(Base):
     highlights: Mapped[list] = mapped_column(
         ARRAY(Text), nullable=False, server_default=sa_text("'{}'::text[]"),
     )
+    report_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    revised_fields: Mapped[list] = mapped_column(ARRAY(Text), nullable=False, server_default=sa_text("'{}'::text[]"))
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=sa_text("now()")
     )

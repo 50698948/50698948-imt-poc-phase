@@ -163,6 +163,17 @@ CREATE TABLE IF NOT EXISTS recommended_tasks (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_inc ON recommended_tasks(incident_no, ticket_version);
+
+CREATE TABLE IF NOT EXISTS task_revision_history (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    incident_no TEXT NOT NULL,
+    action TEXT NOT NULL,
+    revised_by TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rev_history ON task_revision_history(task_id);
 """
 
 

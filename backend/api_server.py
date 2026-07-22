@@ -12,7 +12,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -264,6 +264,109 @@ def generate_report_for_ticket(incident_no: str):
             "tasks_count": len(tasks)}
 
 
+@app.post("/api/tasks/{incident_no}/generate")
+def generate_tasks_for_incident(incident_no: str):
+    """Generate recommended tasks for any incident."""
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    from poc_standalone import _generate_recommendations, _save_recommendations
+    import sqlite3
+    candidates = retrieve(ticket)
+    candidates = [c for c in candidates if c.get("incident_no") != incident_no]
+    reranked = rerank(ticket, candidates)
+    tasks = _generate_recommendations(ticket, reranked)
+    conn = sqlite3.connect(DB_PATH)
+    _save_recommendations(conn, incident_no, ticket.get("version", 1), tasks)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "incident_no": incident_no, "count": len(tasks)}
+
+
+class CreateIncidentRequest(BaseModel):
+    title: str
+    description: str
+    severity: str
+    service_name: str
+    category: str = "application"
+    error_type: Optional[str] = None
+    source: str = "manual"
+
+
+@app.post("/api/incidents/create")
+def create_incident(req: CreateIncidentRequest):
+    """Create a new incident ticket with automatic retrieval."""
+    incident_no = f"INC-{time.strftime('%Y')}-{str(uuid.uuid4().int % 10000).zfill(4)}"
+    ticket_data = {
+        "incident_no": incident_no,
+        "title": req.title,
+        "description": req.description,
+        "severity": req.severity,
+        "service_name": req.service_name,
+        "category": req.category,
+        "status": "open",
+        "error_type": req.error_type,
+    }
+    ingest(ticket_data)
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        raise HTTPException(status_code=500, detail="Failed to create ticket")
+
+    candidates = retrieve(ticket)
+    reranked = rerank(ticket, candidates)
+
+    return {
+        "incident_no": incident_no,
+        "ticket": ticket,
+        "top5_similar": [{"incident_no": r.get("incident_no"), "title": r.get("title"), "score": r.get("rerank_score")} for r in reranked[:5]],
+    }
+
+
+class XMatterAlert(BaseModel):
+    alertId: Optional[str] = None
+    title: str
+    description: str
+    severity: str  # critical/warning/info
+    affectedService: Optional[str] = None
+    tags: Optional[list[str]] = None
+
+
+@app.post("/api/alerts/xmatter")
+def receive_xmatter_alert(alert: XMatterAlert):
+    """Receive xMatter alert webhook — auto-create incident + retrieve similar."""
+    sev_map = {"critical": "P0", "warning": "P1", "info": "P2"}
+    severity = sev_map.get(alert.severity.lower(), "P1")
+    service = alert.affectedService or "unknown"
+    error_type = None
+    if alert.tags:
+        known = {"timeout", "OOM", "deadlock", "race_condition", "config_error", "dependency_failure", "resource_exhaustion", "auth_error", "rate_limit"}
+        for t in alert.tags:
+            if t in known: error_type = t; break
+
+    incident_no = f"INC-{time.strftime('%Y')}-{str(uuid.uuid4().int % 10000).zfill(4)}"
+    ingest({
+        "incident_no": incident_no,
+        "title": alert.title,
+        "description": f"[xMatter Alert {alert.alertId or 'N/A'}] {alert.description}",
+        "severity": severity,
+        "service_name": service,
+        "category": "application",
+        "status": "open",
+        "error_type": error_type,
+    })
+    ticket = get_ticket(incident_no)
+    candidates = retrieve(ticket)
+    reranked = rerank(ticket, candidates)
+
+    return {
+        "incident_no": incident_no,
+        "source": "xmatter",
+        "alert_id": alert.alertId,
+        "top5_similar": [{"incident_no": r.get("incident_no"), "title": r.get("title"), "score": r.get("rerank_score")} for r in reranked[:5]],
+        "summary": f"Created {incident_no}. Found {len(reranked)} similar cases."
+    }
+
+
 @app.get("/api/tasks/{incident_no}")
 def get_tasks(incident_no: str):
     """Get recommended tasks for a ticket."""
@@ -271,16 +374,98 @@ def get_tasks(incident_no: str):
     return tasks
 
 
+@app.post("/api/chat/upload")
+async def chat_upload(file: UploadFile, incident_no: str = Form(...)):
+    """Upload a file (docx/pptx/txt) to parse and append to incident description."""
+    content = await file.read()
+    ext = file.filename.split(".")[-1].lower() if file.filename else "txt"
+    parsed = ""
+
+    try:
+        if ext == "txt" or ext == "log":
+            parsed = content.decode("utf-8", errors="replace")
+        elif ext == "docx":
+            from docx import Document as DocxDocument
+            from io import BytesIO
+            doc = DocxDocument(BytesIO(content))
+            parsed = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        elif ext == "pptx":
+            from pptx import Presentation
+            from io import BytesIO
+            prs = Presentation(BytesIO(content))
+            parsed = "\n".join(shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text") and shape.text.strip())
+        else:
+            parsed = content.decode("utf-8", errors="replace")[:2000]
+    except Exception as e:
+        return {"error": f"Failed to parse {ext}: {str(e)}"}
+
+    if not parsed.strip():
+        return {"error": "No text content extracted"}
+
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        return {"error": "Incident not found"}
+
+    new_desc = f"{ticket.get('description','')}\n\n[via file upload: {file.filename}, {parsed[:1500]}]"
+    update_ticket(incident_no, description=new_desc[:4000])
+    updated = get_ticket(incident_no)
+
+    candidates = retrieve(updated)
+    reranked = rerank(updated, [c for c in candidates if c.get("incident_no") != incident_no])
+
+    old_len = len(ticket.get("description", ""))
+    new_len = len(updated.get("description", ""))
+
+    return {
+        "parsed_text": parsed[:500],
+        "word_count": len(parsed.split()),
+        "desc_before": old_len,
+        "desc_after": new_len,
+        "filename": file.filename,
+        "top_match": reranked[0].get("incident_no") if reranked else "N/A",
+    }
+
+
+@app.post("/api/reports/{incident_no}/publish")
+
+
 @app.post("/api/tasks/{task_id}/revise")
 def revise_task(task_id: str, req: ReviseTaskRequest):
-    """Revise a recommended task."""
+    """Revise a recommended task with history recording."""
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to revise")
     result = revise_task_standalone(task_id, **fields)
     if result is None:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Record revision history
+    import sqlite3, uuid as _uuid
+    action = fields.get("description") and "modified" or fields.get("status", "updated")
+    detail = fields.get("revision_note", "") or fields.get("description", "") or fields.get("status", "")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO task_revision_history(id, task_id, incident_no, action, revised_by, detail) VALUES(?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), task_id, result.get("incident_no", ""), action,
+         fields.get("revised_by", ""), str(detail)[:200]))
+    conn.commit()
+    conn.close()
     return result
+
+
+@app.get("/api/tasks/{incident_no}/history")
+def get_task_history(incident_no: str):
+    """Get revision history for all tasks of an incident."""
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM task_revision_history WHERE incident_no=? ORDER BY created_at DESC LIMIT 30",
+        (incident_no,)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "task_id": r["task_id"], "action": r["action"],
+             "revised_by": r["revised_by"], "detail": r["detail"],
+             "created_at": r["created_at"]} for r in rows]
 
 
 class ChatMessage(BaseModel):
@@ -408,6 +593,57 @@ def incident_timeline(incident_no: str):
     events.sort(key=lambda e: e["time"] or "", reverse=True)
     return {"incident_no": incident_no, "title": ticket.get("title", ""),
             "status": ticket.get("status", ""), "version": ticket.get("version", 1), "events": events}
+
+
+class PublishReportRequest(BaseModel):
+    revised_highlights: Optional[list[str]] = None
+    executive_summary: Optional[str] = None
+    review_notes: Optional[str] = None
+    published_by: str = "engineer"
+
+
+@app.post("/api/reports/{incident_no}/publish")
+def publish_report(incident_no: str, req: PublishReportRequest):
+    """Publish a draft report with optional revisions."""
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM leader_reports WHERE incident_no=? ORDER BY ticket_version DESC LIMIT 1",
+        (incident_no,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="No report found")
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    updates = {"report_status": "published", "published_at": now, "published_by": req.published_by}
+    if req.review_notes:
+        updates["review_notes"] = req.review_notes
+        updates["reviewed_by"] = req.published_by
+        updates["reviewed_at"] = now
+
+    if req.revised_highlights is not None:
+        import json
+        updates["highlights"] = json.dumps(req.revised_highlights)
+        existing = json.loads(row["revised_fields"] or "[]")
+        existing.append("highlights")
+        updates["revised_fields"] = json.dumps(existing)
+
+    if req.executive_summary is not None:
+        content = row["content"]
+        parts = content.split("## 2. Current Status")
+        if len(parts) > 1:
+            content = f"## 1. Executive Summary\n{req.executive_summary}\n\n## 2. Current Status{parts[1]}"
+        updates["content"] = content
+        existing = json.loads(row["revised_fields"] or "[]")
+        existing.append("executive_summary")
+        updates["revised_fields"] = json.dumps(existing)
+
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    conn.execute(f"UPDATE leader_reports SET {set_clause} WHERE id=?", list(updates.values()) + [row["id"]])
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "report_status": "published"}
 
 
 if __name__ == "__main__":
