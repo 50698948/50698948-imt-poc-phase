@@ -16,6 +16,8 @@ export default function TaskBoardPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [assignTo, setAssignTo] = useState("");
+  const [addingNew, setAddingNew] = useState(false);
+  const [newTaskDesc, setNewTaskDesc] = useState("");
 
   useEffect(() => { fetch(`${API}/api/tickets?limit=50`).then((r) => r.json()).then(setIncidents); }, []);
 
@@ -188,6 +190,23 @@ export default function TaskBoardPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              <div className="mt-4">
+                {addingNew ? (
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
+                    <input value={newTaskDesc} onChange={(e) => setNewTaskDesc(e.target.value)}
+                      placeholder="Enter new task description..."
+                      onKeyDown={(e) => { if (e.key === "Enter" && newTaskDesc.trim()) { setAddingNew(false); setNewTaskDesc(""); addHistory("added", newTaskDesc, assignTo || "manual"); } }}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-700 focus:outline-none focus:border-indigo-300" autoFocus />
+                    <div className="flex gap-2">
+                      <button onClick={() => { if (newTaskDesc.trim()) { setAddingNew(false); setNewTaskDesc(""); addHistory("added", newTaskDesc, assignTo || "manual"); } }} className="btn-brand text-xs">Add Task</button>
+                      <button onClick={() => { setAddingNew(false); setNewTaskDesc(""); }} className="btn-secondary text-xs">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setAddingNew(true)} className="btn-secondary text-xs w-full text-center py-3 border-dashed">+ Add Custom Task</button>
+                )}
               </div>
             </>
           )}
