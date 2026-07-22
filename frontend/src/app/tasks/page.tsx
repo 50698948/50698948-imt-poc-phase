@@ -78,19 +78,24 @@ export default function TaskBoardPage() {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/30 text-gray-400 uppercase tracking-wider text-[10px]">
-              <th className="text-left px-4 py-2 font-medium w-36">Incident</th>
+              <th className="text-center px-3 py-2 font-medium w-8"></th>
+              <th className="text-left px-2 py-2 font-medium w-36">Incident</th>
               <th className="text-left px-2 py-2 font-medium">Title</th>
               <th className="text-center px-2 py-2 font-medium w-16">Status</th>
               <th className="text-center px-2 py-2 font-medium w-12">Sev</th>
               <th className="text-left px-2 py-2 font-medium w-24">Service</th>
-              <th className="text-right px-4 py-2 font-medium w-12">Tasks</th>
+              <th className="text-center px-3 py-2 font-medium w-12">v</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {displayedIncidents.map((t: any) => (
               <tr key={t.incident_no} onClick={() => loadTasks(t.incident_no)}
                 className={`cursor-pointer transition-colors ${selected === t.incident_no ? "bg-indigo-50" : "hover:bg-gray-50"}`}>
-                <td className="px-4 py-2.5">
+                <td className="px-3 py-2.5 text-center">
+                  <input type="checkbox" checked={selected === t.incident_no} onChange={() => loadTasks(t.incident_no)}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+                </td>
+                <td className="px-2 py-2.5">
                   <span className="text-indigo-600 font-bold font-mono text-[10px]">{t.incident_no}</span>
                 </td>
                 <td className="px-2 py-2.5 text-gray-700 max-w-xs truncate">{t.title}</td>
@@ -101,7 +106,7 @@ export default function TaskBoardPage() {
                   <span className={`text-[9px] font-bold ${t.severity === "P0" ? "text-red-500" : t.severity === "P1" ? "text-orange-500" : "text-gray-500"}`}>{t.severity}</span>
                 </td>
                 <td className="px-2 py-2.5 text-gray-500 text-[10px]">{t.service_name}</td>
-                <td className="px-4 py-2.5 text-right text-gray-400 text-[10px]">{t.version}</td>
+                <td className="px-3 py-2.5 text-center text-gray-400 text-[10px]">{t.version}</td>
               </tr>
             ))}
           </tbody>
