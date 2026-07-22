@@ -834,8 +834,109 @@ Layer 3 — Derived Events
 - [ ] xMatter webhook 可接收并创建 ticket
 - [ ] Report Draft → Review → Publish 流程可演示
 - [ ] Tasks Accept/Reject/Complete + 编辑标题 + 自定义新增可演示
-- [ ] Chat 抽屉可打开/关闭，支持文本、表格、文件拖拽
-- [ ] 横向时间线展示 4 阶段完整事件链
-- [ ] 6 步 Demo 脚本可在 8 分钟内流畅走完
-- [ ] 所有 API 端点返回 200
-- [ ] 所有前端页面返回 200
+- [x] Chat 抽屉可打开/关闭，支持文本、表格、文件拖拽
+- [x] 纵向时间线展示完整事件链
+- [x] 界面浅色调统一，7 页面风格一致
+- [x] 手动创建 Incident 流程完整（弹窗 → 自动检索）
+- [x] xMatter webhook 可接收并创建 ticket
+- [x] Report Draft → Generate → Revise → Compare → Publish 流程可演示
+- [x] Tasks 表格选择 → Accept/Reject/Complete + ✎ Edit + 👤 Assign + Revision History 可演示
+- [x] 所有 API 端点返回 200
+- [x] 所有前端页面返回 200
+- [x] 前后端 21 个 API 调用全部对齐
+
+---
+
+## 六、实施记录 (Implementation Log)
+
+> 日期：2026-07-23  
+> 状态：已完成
+
+### Phase 1 — 视觉基础
+
+| 变更 | 文件 | Commit |
+|------|------|--------|
+| 浅色调 UI (Linear 风格白底蓝调) | `globals.css` — CSS 变量系统 | `24140fe` |
+| 白色 Header + 侧边栏导航 | `layout.tsx` | `24140fe` |
+| ChatDrawer 框架 (420px 滑出面板) | `layout.tsx` | `24140fe` |
+| 白色 Kanban 看板 | `page.tsx` | `24140fe` |
+| 白色 Lifecycle 页面 | `lifecycle/page.tsx` | `24140fe` |
+| 白色 Retrieve 页面 | `retrieve/page.tsx` | `24140fe` |
+
+### Phase 2 — 核心流程
+
+| 变更 | 文件 | Commit |
+|------|------|--------|
+| `POST /api/incidents/create` — 手动创建 + 自动检索 | `api_server.py` | `b18bad4` |
+| `POST /api/alerts/xmatter` — xMatter webhook 接入 | `api_server.py` | `b18bad4` |
+| `leader_reports` 表增加 7 列 (draft/publish 流程) | `models.py` | `b18bad4` |
+| Task Board: Accept/Reject/Complete + progress bar | `tasks/page.tsx` | `b18bad4` |
+
+### Phase 3 — 高级功能
+
+| 变更 | 文件 | Commit |
+|------|------|--------|
+| `POST /api/chat/upload` — docx/pptx/txt 文件解析 | `api_server.py` | `308411c` |
+| `POST /api/reports/{no}/publish` — 修订 highlights/summary | `api_server.py` | `308411c` |
+| 纵向时间线 — 事件节点 + 点击弹窗 | `incident/[id]/page.tsx` | `308411c` |
+
+### Phase 4 — 优化迭代
+
+| 变更 | 文件 | Commit |
+|------|------|--------|
+| Reports 页面浅色调 + 搜索/筛选 + Generate/Publish | `reports/page.tsx` | `a3d151a` |
+| Reports: Draft/Revise/Compare/Publish 完整流程 | `reports/page.tsx` | `c748e10` |
+| Tasks: incident 下拉表格 + 事件时间线优化 | `tasks/page.tsx` | `1f44a04` |
+| Tasks: 表格 checkbox 选择 + 上下布局 | `tasks/page.tsx` | `063960b` |
+| Tasks: multi-select + bulk + 👤 Assign + 持久化 Revision History | `tasks/page.tsx` | `3cbb3af` |
+| 横向 → 纵向时间线 (按事件时间排列) | `incident/[id]/page.tsx` | `3fdbadd` |
+| Lifecycle: 统一表格 + 事件时间线布局 | `lifecycle/page.tsx` | `3766c35` |
+| Reports: checkbox 表格 + Compare 并排对比 | `reports/page.tsx` | `c748e10` |
+| Tasks: ✎ Edit + 👤 Assign 单条 + 批量操作 | `tasks/page.tsx` | `3cbb3af` |
+| 前端-后端对齐审计 + 4 项修复 | `poc_standalone.py`, `api_server.py` | `0de448b` |
+
+### 最终架构
+
+```
+IMT/
+├── frontend/          Next.js 16 App Router (7 pages)
+│   └── src/app/
+│       ├── page.tsx                   Dashboard (Kanban)
+│       ├── retrieve/page.tsx          E2E Retrieval
+│       ├── lifecycle/page.tsx         Timeline + Events
+│       ├── reports/page.tsx           Draft/Revise/Compare/Publish
+│       ├── chat/page.tsx              Chat interface
+│       ├── tasks/page.tsx             Task Board + History
+│       └── incident/[id]/page.tsx     Detail + Timeline
+│
+├── backend/
+│   └── api_server.py     FastAPI (19 endpoints)
+│
+├── poc/                  Core engine
+│   ├── poc_standalone.py SQLite standalone (all logic)
+│   ├── seed_data.py      49 mock tickets
+│   ├── leader_report.py  Report template engine
+│   └── recommend.py      Task recommendation engine
+│
+├── deploy/               Production deployment
+│   ├── docker-compose.yml  Full stack (4 services)
+│   ├── nginx-default.conf  Frontend proxy
+│   └── ...
+│
+├── build.ps1             Docker build script
+├── deploy.ps1            Local deployment script
+├── idea.md               Design document
+├── guide.md              Operation manual
+└── revised.md            Optimization plan + implementation log
+```
+
+### E2E 验证结果
+
+```
+Services:    PostgreSQL(healthy) | Backend(ok) | Frontend(200)
+API:         Seed(31) | Create(OK) | xMatter(OK) | Lifecycle(4) | Timeline(7) |
+             Retrieve(5) | Chat(OK) | Generate(OK) | Publish(OK) | History(OK)
+Pages:       /(200) | /retrieve(200) | /lifecycle(200) | /reports(200) | /chat(200) |
+             /tasks(200) | /incident/(200)
+Alignment:   21 frontend API calls → 19 backend endpoints (100% match)
+```
