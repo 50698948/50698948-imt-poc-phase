@@ -412,14 +412,41 @@ async def chat_upload(file: UploadFile, incident_no: str = Form(...)):
 
 @app.post("/api/tasks/{task_id}/revise")
 def revise_task(task_id: str, req: ReviseTaskRequest):
-    """Revise a recommended task."""
+    """Revise a recommended task with history recording."""
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to revise")
     result = revise_task_standalone(task_id, **fields)
     if result is None:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Record revision history
+    import sqlite3, uuid as _uuid
+    action = fields.get("description") and "modified" or fields.get("status", "updated")
+    detail = fields.get("revision_note", "") or fields.get("description", "") or fields.get("status", "")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO task_revision_history(id, task_id, incident_no, action, revised_by, detail) VALUES(?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), task_id, result.get("incident_no", ""), action,
+         fields.get("revised_by", ""), str(detail)[:200]))
+    conn.commit()
+    conn.close()
     return result
+
+
+@app.get("/api/tasks/{incident_no}/history")
+def get_task_history(incident_no: str):
+    """Get revision history for all tasks of an incident."""
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM task_revision_history WHERE incident_no=? ORDER BY created_at DESC LIMIT 30",
+        (incident_no,)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "task_id": r["task_id"], "action": r["action"],
+             "revised_by": r["revised_by"], "detail": r["detail"],
+             "created_at": r["created_at"]} for r in rows]
 
 
 class ChatMessage(BaseModel):

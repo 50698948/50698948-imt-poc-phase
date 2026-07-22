@@ -19,6 +19,16 @@ export default function TaskBoardPage() {
   const [addingNew, setAddingNew] = useState(false);
   const [newTaskDesc, setNewTaskDesc] = useState("");
 
+  const loadHistory = async () => {
+    if (!selected) return;
+    try {
+      const res = await fetch(`${API}/api/tasks/${selected}/history`).then((r) => r.json());
+      setHistory(res.map((h: any) => ({ time: h.created_at?.slice(11, 19) || "", action: h.action, by: h.revised_by || "system", detail: h.detail || "" })));
+    } catch { setHistory([]); }
+  };
+
+  const toggleHistory = () => { setShowHistory(!showHistory); if (!showHistory) loadHistory(); };
+
   useEffect(() => { fetch(`${API}/api/tickets?limit=50`).then((r) => r.json()).then(setIncidents); }, []);
 
   const filteredIncidents = incidents.filter((t: any) =>
@@ -119,7 +129,7 @@ export default function TaskBoardPage() {
                       className="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-[10px] text-gray-600 w-32 focus:outline-none focus:border-indigo-300" />
                   </div>
                   <div className="flex items-center gap-1">
-                    <button onClick={() => { setShowHistory(!showHistory); setHistory([]); }} className="text-[10px] text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1">{showHistory ? "Hide History" : "Revision History"}</button>
+                    <button onClick={toggleHistory} className="text-[10px] text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1">{showHistory ? "Hide History" : "Revision History"}</button>
                     <button onClick={() => bulkAction("in_progress")} disabled={selectedIds.size === 0} className="text-[10px] bg-indigo-500 hover:bg-indigo-600 disabled:opacity-30 text-white rounded px-2.5 py-1 font-medium">Accept</button>
                     <button onClick={() => bulkAction("completed")} disabled={selectedIds.size === 0} className="text-[10px] bg-emerald-500 hover:bg-emerald-600 disabled:opacity-30 text-white rounded px-2.5 py-1 font-medium">Complete</button>
                     <button onClick={() => bulkAction("rejected")} disabled={selectedIds.size === 0} className="text-[10px] bg-white border border-gray-200 hover:border-red-300 disabled:opacity-30 text-gray-600 rounded px-2.5 py-1">Reject</button>
@@ -183,6 +193,7 @@ export default function TaskBoardPage() {
                       </div>
                       <div className="flex gap-1 mt-1.5">
                         {!editingId && <button onClick={() => { setEditingId(t.id); setEditText(t.description); }} className="text-[9px] text-gray-400 hover:text-gray-600">✎ Edit</button>}
+                        {assignTo && <button onClick={() => { reviseTask(t.id, { revised_by: assignTo }); addHistory("assigned", `T${t.task_order} → ${assignTo}`, assignTo); }} className="text-[9px] text-gray-400 hover:text-indigo-600">👤 Assign</button>}
                         {t.status === "pending" && <button onClick={() => { reviseTask(t.id, { status: "in_progress", revised_by: assignTo || "demo-user" }); addHistory("accepted", `T${t.task_order}`, assignTo || "demo-user"); }} className="text-[9px] text-indigo-500 hover:text-indigo-600 ml-2">Accept</button>}
                         {t.status === "in_progress" && <button onClick={() => { const r = prompt("Result:"); if (r) { reviseTask(t.id, { status: "completed", revision_note: r, revised_by: assignTo || "demo-user" }); addHistory("completed", `T${t.task_order}: ${r}`, assignTo || "demo-user"); } }} className="text-[9px] text-emerald-500 hover:text-emerald-600 ml-2">Complete</button>}
                         {(t.status === "pending" || t.status === "in_progress") && <button onClick={() => { const r = prompt("Rejection reason:"); if (r) { reviseTask(t.id, { status: "rejected", revision_note: r, revised_by: assignTo || "demo-user" }); addHistory("rejected", `T${t.task_order}: ${r}`, assignTo || "demo-user"); } }} className="text-[9px] text-red-400 hover:text-red-500 ml-2">Reject</button>}
