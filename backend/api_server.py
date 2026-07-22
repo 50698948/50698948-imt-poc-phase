@@ -264,6 +264,25 @@ def generate_report_for_ticket(incident_no: str):
             "tasks_count": len(tasks)}
 
 
+@app.post("/api/tasks/{incident_no}/generate")
+def generate_tasks_for_incident(incident_no: str):
+    """Generate recommended tasks for any incident."""
+    ticket = get_ticket(incident_no)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    from poc_standalone import _generate_recommendations, _save_recommendations
+    import sqlite3
+    candidates = retrieve(ticket)
+    candidates = [c for c in candidates if c.get("incident_no") != incident_no]
+    reranked = rerank(ticket, candidates)
+    tasks = _generate_recommendations(ticket, reranked)
+    conn = sqlite3.connect(DB_PATH)
+    _save_recommendations(conn, incident_no, ticket.get("version", 1), tasks)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "incident_no": incident_no, "count": len(tasks)}
+
+
 class CreateIncidentRequest(BaseModel):
     title: str
     description: str

@@ -125,9 +125,10 @@ export default function TaskBoardPage() {
         <div className="bg-white border border-gray-200 rounded-2xl p-16 text-center">
           <div className="text-3xl mb-3">📭</div>
           <p className="text-gray-500 text-sm mb-1">No tasks for <span className="text-indigo-600 font-bold">{selected}</span></p>
-          <p className="text-gray-400 text-xs">Update the incident to auto-generate tasks, or add custom tasks below</p>
-          <div className="mt-4">
-            <button onClick={() => setAddingNew(true)} className="btn-brand text-xs">+ Add Custom Task</button>
+          <p className="text-gray-400 text-xs mb-3">Tasks are auto-generated when the incident is updated</p>
+          <div className="flex items-center justify-center gap-2">
+            <button onClick={async () => { await fetch(`${API}/api/tasks/${selected}/generate`, { method: "POST" }); loadTasks(selected); }} className="btn-brand text-xs">Generate Tasks</button>
+            <button onClick={() => setAddingNew(true)} className="btn-secondary text-xs">+ Add Custom</button>
           </div>
         </div>
       ) : (
