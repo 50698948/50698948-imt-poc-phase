@@ -99,6 +99,8 @@ def seed_database():
 def list_tickets(
     status: Optional[str] = None,
     category: Optional[str] = None,
+    severity: Optional[str] = None,
+    service: Optional[str] = None,
     limit: int = Query(default=50, le=100),
 ):
     """List all tickets, optionally filtered."""
@@ -113,6 +115,12 @@ def list_tickets(
     if category:
         q += " AND category=?"
         params.append(category)
+    if severity:
+        q += " AND severity=?"
+        params.append(severity)
+    if service:
+        q += " AND service_name=?"
+        params.append(service)
     q += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     rows = conn.execute(q, params).fetchall()
@@ -424,9 +432,6 @@ async def chat_upload(file: UploadFile, incident_no: str = Form(...)):
         "filename": file.filename,
         "top_match": reranked[0].get("incident_no") if reranked else "N/A",
     }
-
-
-@app.post("/api/reports/{incident_no}/publish")
 
 
 @app.post("/api/tasks/{task_id}/revise")
