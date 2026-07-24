@@ -780,9 +780,459 @@ Pak Ming 排查白名单问题时遇到语法错误
 
 ---
 
-## 十二、验收标准
+## 十二、用户完整操作旅程 — Incident 处理全链路
 
-### 12.1 功能验收清单
+> 本章从用户视角出发，完整描述一个 Incident 从发生到闭环的**端到端操作流程**。  
+> 涵盖：事件信息整理 → 历史检索 → 任务推荐 → 报告生成 → 复盘归档 的完整链路。
+
+### 12.1 旅程总览
+
+```
+Incident 发生
+  │
+  ├─ ① 创建 Ticket (手动 / xMatter 自动)
+  │     └─ AI 自动生成初始向量 embedding
+  │
+  ├─ ② 事件信息追加与格式化 (Chat + Prompt)
+  │     └─ 工程师通过 Chat 不断追加告警、日志、会议纪要
+  │     └─ AI 自动格式化非结构化文本 → 结构化事件字段
+  │     └─ 每次追加后：re-embed → re-retrieve → 质量提升
+  │
+  ├─ ③ 历史相似事件检索
+  │     └─ 实时展示 Top-5 相似历史 Incident
+  │     └─ 随事件描述不断丰富，检索精度持续提升
+  │
+  ├─ ④ 智能任务推荐 (Recommend Tasks)
+  │     └─ AI 基于当前事件 + 历史事件 action_plan → 推荐 Task
+  │     └─ 工程师 Accept / Reject / Edit / Assign
+  │
+  ├─ ⑤ 报告生成 (Report)
+  │     └─ 按 6-section 模板生成 Report (Draft → Review → Publish)
+  │     └─ 干系人可随时查看已发布的 Report
+  │
+  └─ ⑥ 复盘归档 (Post-Mortem)
+        └─ 事件 Resolved → 一键生成 SRE Notebook 复盘
+        └─ 三要素切片 → pgvector 归档 → 知识自演进
+```
+
+### 12.2 阶段详解
+
+#### 阶段 ①：Incident 发生 → 创建 Ticket
+
+**场景**：14:32 UTC，监控系统触发告警——Payment Service P99 延迟飙升至 2.8s。
+
+**用户操作**：
+
+| 步骤 | 操作 | 系统行为 |
+|------|------|---------|
+| 1 | 方式A：Dashboard 点击 `[+ New Incident]`，填写 Title/Description/Severity/Service | 创建 Incident，生成 embedding_description 向量 |
+| 1 | 方式B：xMatter 自动推送 Webhook | 解析 Payload → 自动创建 + mapping 字段 |
+| 2 | Ticket 创建后 → 系统自动触发首次检索 | 返回 Top-5 相似历史 Incident 预览 |
+
+**关键设计**：创建即可见 —— 不需要工程师手动去检索页面重复输入。创建时刻的 embedding 为后续所有检索提供基础。
+
+**数据流**：
+
+```
+xMatter Alert / Manual Input
+  → POST /api/incidents/create
+  → INSERT INTO incidents (status=open, version=1, ...)
+  → embed(title + description) → embedding_description
+  → pgvector cosine similarity → Top-5 matching tickets
+  → 返回: incident_no + top5_similar 预览
+```
+
+---
+
+#### 阶段 ②：事件信息追加与格式化 (Chat + Prompt)
+
+> 这是整个系统的核心交互界面 —— 工程师通过 Chat 持续追加信息，AI 自动格式化并更新 Incident。
+
+**场景**：工程师 Pak Ming 在排查过程中不断获得新信息：告警详情、日志片段、Slack 讨论、会议纪要、Word 文档。
+
+**用户操作流程**：
+
+```
+┌─ Chat 对话框 ─────────────────────────────────────────────┐
+│                                                           │
+│  [14:35] 工程师: /status investigating                    │
+│  [14:35] AI: ✓ Status updated. Score: 5.6 → 8.2           │
+│                                                           │
+│  [14:38] 工程师: (粘贴 PagerDuty 告警)                    │
+│    "Host payment-03: P99 latency 2.8s, error rate 60%,     │
+│     connection pool HikariCP active=50/50 pending=340"     │
+│  [14:38] AI: ✓ Parsed alert. 3 metrics added.             │
+│    Updated incident description. Score: 8.2 → 14.5         │
+│    Top match: INC-2024-0002 (connection pool, score=18.5)  │
+│                                                           │
+│  [14:42] 工程师: (拖拽文件 incident-log.docx)              │
+│  [14:42] AI: ✓ File parsed (2.3KB). 156 words added.      │
+│    Score: 14.5 → 17.8                                     │
+│                                                           │
+│  [14:45] 工程师: /rc fraud-check call in /charge handler   │
+│    causing N+1 connection pattern                           │
+│  [14:45] AI: ✓ Root cause saved. Re-embedded.             │
+│    Rerank score: 17.8 → 22.1 (Partial root cause align)   │
+│    Top match: INC-2024-0002 (score=28.3)                   │
+│                                                           │
+│  [14:50] 工程师: /res rolled back deployment,              │
+│    moved fraud-check to async                              │
+│  [14:50] AI: ✓ Resolution saved. Status → mitigated.      │
+│    Report draft generated. 8 tasks recommended.            │
+│                                                           │
+│  [quick actions] [/status] [/rc] [/res] [/recommend]       │
+│  [input area with file drop zone...........] [Send]        │
+└───────────────────────────────────────────────────────────┘
+```
+
+**Chat + Prompt 支持的输入类型**：
+
+| 输入类型 | 示例 | AI 处理 |
+|---------|------|---------|
+| **文本命令** | `/status investigating` | 解析命令 → 更新状态 |
+| **结构化指标** | 粘贴 Markdown 表格 `\| Metric \| Value \|` | 提取 K/V → 追加到 description |
+| **非结构化文本** | 粘贴 Slack 讨论 / PagerDuty 告警 | LLM 提取关键信息 → 结构化追加 |
+| **文件上传** | `.docx` / `.pptx` / `.txt` | 后端解析文本 → 追加到 description |
+| **Root Cause** | `/rc N+1 connection pattern` | 更新 root_cause → re-embed root_cause 向量 |
+| **Resolution** | `/res rolled back deployment` | 更新 resolution → 自动生成 Report + Tasks |
+
+**每次追加后的级联效应**：
+
+```
+Chat 输入 / 文件上传
+  → update_ticket_status()
+  → 语义字段变更 → re-embed (description / root_cause)
+  → pgvector 重新检索 → 候选集变化
+  → 余弦精排 → Rerank Score 更新
+  → 若 root_cause/resolution 变更 → 自动生成 Report (draft) + Recommend Tasks
+  → 前端 Chat 显示: 变更摘要 + Score 变化 + Top Match
+```
+
+**Prompt 设计原则**：
+
+Chat 的 AI 响应需满足以下要求：
+1. **简洁**：单次响应 ≤ 5 行
+2. **数据驱动**：显示 Score 变化和 Top Match 变化
+3. **操作引导**：提示下一步建议操作 (如 "建议查看 /recommend" 或 "/report")
+4. **上下文感知**：记住当前 Incident 的状态，不重复询问已确认的信息
+
+---
+
+#### 阶段 ③：历史相似事件检索
+
+**场景**：随着 Pak Ming 不断追加事件信息，系统持续检索并展示越来越精准的历史匹配。
+
+**用户可见的检索演进**：
+
+```
+Event: INC-2025-0001   Status: investigating   v3
+────────────────────────────────────────────────────
+
+检索分数演进:
+  v1 (T+0):    Avg Score = 5.6   (模糊描述，仅 65 字符)
+  v2 (T+10):   Avg Score = 9.4   (+271 字符，补充了连接池/线程指标)
+  v3 (T+45):   Avg Score = 17.3  (root_cause 填入，N+1 模式识别)
+  v4 (T+90):   Avg Score = 18.3  (resolution 填入)
+
+当前 Top-5 相似事件:
+  ┌────────────────────────────────────────────────────┐
+  │ #1 INC-2024-0002  score=28.3                       │
+  │    PostgreSQL connection pool exhausted             │
+  │    Root Cause: N+1 queries → pool drain             │
+  │    Resolution: Rollback + JOIN + pgbouncer          │
+  │    [Root cause highly aligned]                      │
+  │                                                    │
+  │ #2 INC-2024-0001  score=22.1                       │
+  │    MySQL master CPU 100%                            │
+  │    (same service: order-service)                    │
+  │                                                    │
+  │ #3 INC-2024-0039  score=18.7                       │
+  │    PostgreSQL autovacuum bloat                      │
+  │    (same category: database)                        │
+  └────────────────────────────────────────────────────┘
+```
+
+**检索技术栈**：
+
+```
+当前 Incident 文本
+  → embedding_description (384-dim)
+  → pgvector cosine similarity (ivfflat index, lists=20)
+  → 全文检索 (PostgreSQL tsvector, GIN index)
+  → 结构化过滤 (service_name, category, severity)
+  → RRF 融合 (k=60) → Top-30 候选
+  → 余弦精排 (root_cause embedding 加权) → Top-5
+```
+
+**用户交互**：
+- Top-5 卡片可点击 → 跳转查看完整历史 Incident 详情
+- 每个卡片展示：Incident No、Title、Root Cause、Resolution、相似度分数、原因
+- 随版本更新实时刷新
+
+---
+
+#### 阶段 ④：智能任务推荐 (Recommend Tasks)
+
+**场景**：系统根据当前事件 + 匹配到的历史事件，为工程师推荐具体可执行的任务。
+
+**触发时机**：
+- `update_ticket_status()` 调用时自动生成
+- Chat 中输入 `/recommend` 命令
+- Task Board 页面手动点击 "Generate Tasks"
+
+**任务生成规则**：
+
+| 来源 | 优先级 | 数量 | 示例 |
+|------|--------|------|------|
+| error_type 模板匹配 | P1 | 3 条 | "Check connection pool metrics for payment-service" |
+| SRE Playbook 通用 | P2 | 4 条 | "Assess blast radius" / "Check recent deployments" |
+| 相似历史 event action_plan 提取 | P3 | 动态 | 从 INC-2024-0002 的 action_plan 中提取步骤 |
+| 当前根因确认 | P4 | 1 条 | "Confirm root cause: N+1 connection pattern" |
+
+**用户操作**：
+
+```
+Task Board — INC-2025-0001
+Progress: ████████░░░░░░░░  4/8 completed (50%)
+
+☑ ● T01 Check connection pool metrics          src: best-practice/timeout
+     assigned: david.lin   ✓ Confirmed: active=50/50, pending=340
+     [completed by david.lin · 14:35]
+
+☐ ◐ T02 Review slow query logs                  src: best-practice/timeout
+     assigned: david.lin
+     [Accept] [Complete] [Reject]
+
+☐ ○ T03 Verify recent deployment diff           src: best-practice/timeout
+     [✎ Edit] [👤 Assign] [Accept] [Reject]
+
+☑ ✕ T04 Assess blast radius                      src: sre-playbook/general
+     Rejected: Impact limited to payment-service only
+
+[+ Add Custom Task]
+```
+
+**任务生命周期**：
+
+```
+系统生成 (pending)
+  → Engineer Accept → in_progress (指派负责人 + 备注)
+  → Engineer Complete → completed (强制填写结果/证据)
+  → Engineer Reject → rejected (强制填写拒绝原因)
+  → 任意状态 → Edit 修改标题/描述
+  → 任意状态 → Assign 指派给他人
+  → 手动 + Add Custom Task (source = manual)
+```
+
+**Revision History 自动记录**：
+
+每次操作自动写入 `task_revision_history` 表：
+
+| 时间 | 动作 | 操作人 | 详情 |
+|------|------|--------|------|
+| 14:35 | accepted | david.lin | T01: Check connection pool |
+| 14:38 | completed | david.lin | T01: Confirmed active=50/50 |
+| 14:40 | rejected | david.lin | T04: Not applicable |
+
+---
+
+#### 阶段 ⑤：报告生成 (Report)
+
+**场景**：干系人 (Manager) 要求了解事件进展 → 工程师生成结构化 Report。
+
+**触发时机**：
+- 自动：每次 `update_ticket_status()` 调用后 → 自动生成 draft
+- 手动：Reports 页面点击 "Generate Report"
+
+**Report 模板 (6-section)**：
+
+```
+INCIDENT LEADERSHIP REPORT — INC-2025-0001
+==========================================
+## 1. Executive Summary
+  当前描述 + 最匹配历史事件 (INC-2024-0002, score=28.3)
+
+## 2. Current Status
+  Status: INVESTIGATING | Severity: P0 | Error: timeout
+
+## 3. Impact Assessment
+  P0: CRITICAL — 60% of /charge requests failing, revenue impact
+
+## 4. Investigation Progress
+  Root Cause: N+1 connection pattern in /charge handler (confirmed)
+
+## 5. Key Highlights
+  1. [STATUS] INVESTIGATING — severity P0
+  2. [ROOT CAUSE] N+1 connection pattern in fraud-check handler
+  3. [REFERENCE] INC-2024-0002 — PostgreSQL connection pool (score=28.3)
+  4. [REFERENCE] INC-2024-0001 — MySQL CPU spike (score=22.1)
+  5. [NEXT] Apply fix in staging. Roll out to production.
+
+## 6. Recommended Next Steps
+  1. Test fix in staging environment
+  2. Roll out to production during maintenance window
+  3. Monitor HikariCP metrics for 30min post-deployment
+==========================================
+```
+
+**Draft → Review → Publish 流程**：
+
+```
+Report 生成 (auto, status=draft)
+  → Engineer opens /reports → 看到 [DRAFT] 标签
+  → [Review & Publish]:
+     - 编辑 Executive Summary
+     - 增删 Highlights
+     - 添加 Review Notes (internal)
+  → [Publish] → status=published
+  → 干系人可见
+
+Version 对比:
+  v2: [STATUS] INV. + [REFERENCE] ×2 + [NEXT]          (3 highlights)
+  v3: + [ROOT CAUSE]                                     (4 highlights)
+  v4: + [ACTION] + [REFERENCE] ×2                       (5 highlights)
+```
+
+---
+
+#### 阶段 ⑥：复盘归档 (Post-Mortem)
+
+**场景**：事件 Resolved 后，Leon 完成复盘，沉淀知识。
+
+**触发条件**：
+- Incident status = `resolved`
+- "一键复盘" 按钮解锁
+
+**复盘流程**：
+
+```
+Leon 点击 "一键复盘"
+  → LLM 聚合:
+     - Incident 70+ 属性
+     - 所有 Task 及其执行状态
+     - Timeline 事件流 (创建/更新/Report/Tasks)
+     - 版本更新历史
+  → 生成 SRE Notebook Markdown 报告 (11 section)
+
+Leon 审阅 → 编辑 → 点击 "发布复盘"
+  → Confluence: 自动创建 Incidents/2025/07/IN9451263 页面
+  → pgvector: 提取三要素 (现象/原因/对策) → 向量化 → 写入 post_mortem_chunks
+
+后续影响:
+  → 下一个类似 Incident 发生 → RAG 检索 → 可召回本次复盘的知识
+  → 系统完成知识自演进闭环
+```
+
+**复盘内容对应关系**：
+
+| SRE Notebook Section | 数据来源 |
+|---------------------|---------|
+| 严重程度 | Incident.severity (最终确认值) |
+| 故障日期 | Incident.created_at |
+| Owner | Task 中 assigned 最多的 engineer |
+| 故障总结 | AI 摘要 (UC-09 生成) |
+| 故障历史 | Timeline 事件流 |
+| 故障回应 | Report.highlights 中的 ACTION 条目 |
+| 服务影响面 | Incident.affected_components + Report Impact Assessment |
+| 修复行动 | Resolution 文本 + Task 完成记录 |
+| 复盘要点 | LLM 生成 (基于现象/原因/对策) |
+
+---
+
+### 12.3 全链路数据流图
+
+```
+                    ┌─────────────┐
+                    │  Incident   │
+                    │  Occurs     │
+                    └──────┬──────┘
+                           │
+              ┌────────────▼────────────┐
+              │ ① Create Ticket         │
+              │   embed(title+desc)      │
+              │   → initial retrieval   │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │ ② Chat + Prompt Loop    │◄──── 工程师持续输入
+              │   /status /rc /res      │      (文本/表格/文件)
+              │   每次追加 → re-embed   │
+              │   → re-retrieve         │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │ ③ Historical Retrieval  │
+              │   Vector + FTS + Struct │
+              │   RRF fusion → Top-30   │
+              │   Cosine rerank → Top-5 │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │ ④ Recommend Tasks       │
+              │   error_type template   │
+              │   + playbook + history  │
+              │   Accept/Reject/Edit    │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │ ⑤ Report (6-section)    │
+              │   Draft → Review → Pub  │
+              │   Version comparison    │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │ ⑥ Post-Mortem           │
+              │   SRE Notebook (11 sec) │
+              │   → Confluence          │
+              │   → pgvector chunks     │
+              │   → Knowledge loop      │
+              └─────────────────────────┘
+```
+
+### 12.4 用户操作时间线示例 (IN9451263)
+
+```
+T+0min   Pak Ming 接警 → xMatter 自动创建 INC-2025-0001
+         → 系统展示 Top-5 相似事件预览
+         检索分数: 5.6
+
+T+5min   Pak Ming 在 Chat 中粘贴 PagerDuty 告警详情
+         → AI 提取连接池/延迟/错误率指标
+         → 检索分数: 5.6 → 9.4
+         Chat 提示: "Top match: INC-2024-0002 (connection pool)"
+
+T+15min  Pak Ming 输入 /status investigating
+         → 状态变更 → 自动生成 Report draft v2 + 7 Tasks
+
+T+30min  Leon 在 Reports 页面查看 draft → 审阅 → 发布 v2
+         → 干系人可见事件进展
+
+T+45min  Pak Ming 在 Chat 中输入 /rc fraud-check N+1 pattern
+         → root_cause 更新 → re-embed → 检索分数: 9.4 → 17.3
+         → Report 自动更新为 v3 (新增 [ROOT CAUSE] highlight)
+
+T+60min  Pak Ming 在 Task Board 中:
+         → Accept T01 (连接池检查) → Complete ✓
+         → Reject T04 (爆炸半径评估) → 理由: 影响仅限 payment-service
+         → Accept T02 (日志审查) → 进行中
+
+T+90min  Pak Ming 输入 /res rolled back + moved to async
+         → resolution 更新 → 检索分数: 17.3 → 18.3
+         → Report 自动更新为 v4 (新增 [ACTION] highlight)
+
+T+120min 监控确认指标恢复 → Leon 将状态改为 resolved
+
+T+150min Leon 点击 "一键复盘"
+         → 10s 生成 SRE Notebook
+         → Confluence 发布 → pgvector 归档
+         → 知识闭环完成
+```
+
+---
+
+## 十三、验收标准
+
+### 13.1 功能验收清单
 
 | 编号 | 功能 | 验收条件 |
 |------|------|---------|
@@ -800,7 +1250,7 @@ Pak Ming 排查白名单问题时遇到语法错误
 | F-12 | 通报模板 | 自动填充 + WebSocket 广播 |
 | F-13 | 历史检索 | 关键词 + 向量融合检索 |
 
-### 12.2 非功能验收清单
+### 13.2 非功能验收清单
 
 | 编号 | 指标 | 目标值 |
 |------|------|--------|
@@ -813,7 +1263,7 @@ Pak Ming 排查白名单问题时遇到语法错误
 
 ---
 
-## 十三、附录
+## 十四、附录
 
 ### A. 用例编号映射
 
